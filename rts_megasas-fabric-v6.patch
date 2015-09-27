@@ -1,0 +1,5130 @@
+>From 698629e795fa0e4681dee8f4968ec5890dfe0640 Mon Sep 17 00:00:00 2001
+From: Hannes Reinecke <hare@suse.de>
+Date: Wed, 6 Feb 2013 09:46:33 +0100
+Subject: [PATCH] rts_megasas: In-kernel LSI Megaraid emulation (v6)
+
+This patch add the in-kernel LSI Megaraid emulation, version 6.
+
+Signed-off-by: Hannes Reinecke <hare@suse.de>
+
+diff --git a/drivers/target/Kconfig b/drivers/target/Kconfig
+index 1830368..583bfc6 100644
+--- a/drivers/target/Kconfig
++++ b/drivers/target/Kconfig
+@@ -33,5 +33,6 @@ source "drivers/target/loopback/Kconfig"
+ source "drivers/target/tcm_fc/Kconfig"
+ source "drivers/target/iscsi/Kconfig"
+ source "drivers/target/sbp/Kconfig"
++source "drivers/target/rts_megasas/Kconfig"
+ 
+ endif
+diff --git a/drivers/target/Makefile b/drivers/target/Makefile
+index 9fdcb56..a2ed764 100644
+--- a/drivers/target/Makefile
++++ b/drivers/target/Makefile
+@@ -27,3 +27,4 @@ obj-$(CONFIG_LOOPBACK_TARGET)	+= loopback/
+ obj-$(CONFIG_TCM_FC)		+= tcm_fc/
+ obj-$(CONFIG_ISCSI_TARGET)	+= iscsi/
+ obj-$(CONFIG_SBP_TARGET)	+= sbp/
++obj-$(CONFIG_RTS_MEGASAS)	+= rts_megasas/
+diff --git a/drivers/target/rts_megasas/Kconfig b/drivers/target/rts_megasas/Kconfig
+new file mode 100644
+index 0000000..c3daab3
+--- /dev/null
++++ b/drivers/target/rts_megasas/Kconfig
+@@ -0,0 +1,6 @@
++config RTS_MEGASAS
++	tristate "RTS_MEGASAS fabric module"
++	depends on TARGET_CORE && CONFIGFS_FS
++	default n
++	---help---
++	Say Y here to enable the RTS_MEGASAS fabric module
+diff --git a/drivers/target/rts_megasas/Makefile b/drivers/target/rts_megasas/Makefile
+new file mode 100644
+index 0000000..d50d2df
+--- /dev/null
++++ b/drivers/target/rts_megasas/Makefile
+@@ -0,0 +1,2 @@
++rts_megasas-y += rts_megasas_mfi.o rts_megasas_vhost.o rts_megasas_fabric.o
++obj-$(CONFIG_RTS_MEGASAS) += rts_megasas.o
+diff --git a/drivers/target/rts_megasas/mfi.h b/drivers/target/rts_megasas/mfi.h
+new file mode 100644
+index 0000000..358d3fe
+--- /dev/null
++++ b/drivers/target/rts_megasas/mfi.h
+@@ -0,0 +1,1209 @@
++/*
++ * NetBSD header file, copied from
++ * http://gitorious.org/freebsd/freebsd/blobs/HEAD/sys/dev/mfi/mfireg.h
++ */
++/*-
++ * Copyright (c) 2006 IronPort Systems
++ * Copyright (c) 2007 LSI Corp.
++ * Copyright (c) 2007 Rajesh Prabhakaran.
++ * Copyright (c) 2012 Hannes Reinecke
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#ifndef MFI_REG_H
++#define MFI_REG_H
++
++/*
++ * MegaRAID SAS MFI firmware definitions
++ */
++
++/*
++ * Firmware state values.
++ */
++#define MFI_FWSTATE_MASK                0xf0000000
++#define MFI_FWSTATE_UNDEFINED           0x00000000
++#define MFI_FWSTATE_BB_INIT             0x10000000
++#define MFI_FWSTATE_FW_INIT             0x40000000
++#define MFI_FWSTATE_WAIT_HANDSHAKE      0x60000000
++#define MFI_FWSTATE_FW_INIT_2           0x70000000
++#define MFI_FWSTATE_DEVICE_SCAN         0x80000000
++#define MFI_FWSTATE_BOOT_MSG_PENDING    0x90000000
++#define MFI_FWSTATE_FLUSH_CACHE         0xa0000000
++#define MFI_FWSTATE_READY               0xb0000000
++#define MFI_FWSTATE_OPERATIONAL         0xc0000000
++#define MFI_FWSTATE_FAULT               0xf0000000
++#define MFI_FWSTATE_MAXSGL_MASK         0x00ff0000
++#define MFI_FWSTATE_MAXCMD_MASK         0x0000ffff
++#define MFI_FWSTATE_MSIX_SUPPORTED      0x04000000
++#define MFI_FWSTATE_HOSTMEMREQD_MASK    0x08000000
++
++/* MFI Commands */
++typedef enum {
++	MFI_CMD_INIT = 0x00,
++	MFI_CMD_LD_READ,
++	MFI_CMD_LD_WRITE,
++	MFI_CMD_LD_SCSI_IO,
++	MFI_CMD_PD_SCSI_IO,
++	MFI_CMD_DCMD,
++	MFI_CMD_ABORT,
++	MFI_CMD_SMP,
++	MFI_CMD_STP
++} mfi_cmd_t;
++
++/* Direct commands */
++typedef enum {
++	MFI_DCMD_CTRL_MFI_HOST_MEM_ALLOC =  0x0100e100,
++	MFI_DCMD_CTRL_MISC_CPX =            0x0100e200,
++	MFI_DCMD_CTRL_MISC_CPX_INIT_DATA_GET = 0x0100e201,
++	MFI_DCMD_CTRL_MISC_CPX_QUEUE_DATA = 0x0100e202,
++	MFI_DCMD_CTRL_MISC_CPX_UNREGISTER = 0x0100e203,
++	MFI_DCMD_CTRL_GET_INFO =            0x01010000,
++	MFI_DCMD_CTRL_GET_PROPERTIES =      0x01020100,
++	MFI_DCMD_CTRL_SET_PROPERTIES =      0x01020200,
++	MFI_DCMD_CTRL_ALARM =               0x01030000,
++	MFI_DCMD_CTRL_ALARM_GET =           0x01030100,
++	MFI_DCMD_CTRL_ALARM_ENABLE =        0x01030200,
++	MFI_DCMD_CTRL_ALARM_DISABLE =       0x01030300,
++	MFI_DCMD_CTRL_ALARM_SILENCE =       0x01030400,
++	MFI_DCMD_CTRL_ALARM_TEST =          0x01030500,
++	MFI_DCMD_CTRL_EVENT_GETINFO =       0x01040100,
++	MFI_DCMD_CTRL_EVENT_CLEAR =         0x01040200,
++	MFI_DCMD_CTRL_EVENT_GET =           0x01040300,
++	MFI_DCMD_CTRL_EVENT_COUNT =         0x01040400,
++	MFI_DCMD_CTRL_EVENT_WAIT =          0x01040500,
++	MFI_DCMD_CTRL_SHUTDOWN =            0x01050000,
++	MFI_DCMD_HIBERNATE_STANDBY =        0x01060000,
++	MFI_DCMD_PR_GET_STATUS =            0x01070100,
++	MFI_DCMD_PR_GET_PROPERTIES =        0x01070200,
++	MFI_DCMD_PR_SET_PROPERTIES =        0x01070300,
++	MFI_DCMD_PR_START =                 0x01070400,
++	MFI_DCMD_PR_STOP =                  0x01070500,
++	MFI_DCMD_TIME_SECS_GET =            0x01080201,
++	MFI_DCMD_FLASH_FW_OPEN =            0x010f0100,
++	MFI_DCMD_FLASH_FW_DOWNLOAD =        0x010f0200,
++	MFI_DCMD_FLASH_FW_FLASH =           0x010f0300,
++	MFI_DCMD_FLASH_FW_CLOSE =           0x010f0400,
++	MFI_DCMD_CTRL_GET_TIME =            0x01080101,
++	MFI_DCMD_CTRL_SET_TIME =            0x01080102,
++	MFI_DCMD_CTRL_BIOS_DATA_GET =       0x010c0100,
++	MFI_DCMD_CTRL_BIOS_DATA_SET =       0x010c0200,
++	MFI_DCMD_CTRL_FACTORY_DEFAULTS =    0x010d0000,
++	MFI_DCMD_CTRL_MFC_DEFAULTS_GET =    0x010e0201,
++	MFI_DCMD_CTRL_MFC_DEFAULTS_SET =    0x010e0202,
++	MFI_DCMD_CTRL_CACHE_FLUSH =         0x01101000,
++	MFI_DCMD_CTRL_IO_METRICS_GET =      0x01170200,
++	MFI_DCMD_PD_GET_LIST =              0x02010000,
++	MFI_DCMD_PD_LIST_QUERY =            0x02010100,
++	MFI_DCMD_PD_GET_INFO =              0x02020000,
++	MFI_DCMD_PD_STATE_SET =             0x02030100,
++	MFI_DCMD_PD_REBUILD =               0x02040100,
++	MFI_DCMD_PD_CLEAR_START =	    0x02050100,
++	MFI_DCMD_PD_CLEAR_ABORT =	    0x02050200,
++	MFI_DCMD_PD_GET_PROGRESS =	    0x02060000,
++	MFI_DCMD_PD_BLINK =                 0x02070100,
++	MFI_DCMD_PD_UNBLINK =               0x02070200,
++	MFI_DCMD_LD_MAP_GET_INFO =	    0x0300e101,
++	MFI_DCMD_LD_SYNC =		    0x0300e102,
++	MFI_DCMD_LD_GET_LIST =              0x03010000,
++	MFI_DCMD_LD_GET_INFO =              0x03020000,
++	MFI_DCMD_LD_GET_PROP =              0x03030000,
++	MFI_DCMD_LD_SET_PROP =              0x03040000,
++	MFI_DCMD_LD_DELETE =                0x03090000,
++	MFI_DCMD_CFG_READ =                 0x04010000,
++	MFI_DCMD_CFG_ADD =                  0x04020000,
++	MFI_DCMD_CFG_CLEAR =                0x04030000,
++	MFI_DCMD_CFG_MAKE_SPARE =	    0x04040000,
++	MFI_DCMD_CFG_REMOVE_SPARE =	    0x04050000,
++	MFI_DCMD_CFG_FOREIGN_READ =         0x04060100,
++	MFI_DCMD_CFG_FOREIGN_IMPORT =       0x04060400,
++	MFI_DCMD_BBU_STATUS =               0x05010000,
++	MFI_DCMD_BBU_CAPACITY_INFO =        0x05020000,
++	MFI_DCMD_BBU_DESIGN_INFO =          0x05030000,
++	MFI_DCMD_BBU_PROP_GET =             0x05050100,
++	MFI_DCMD_CLUSTER =                  0x08000000,
++	MFI_DCMD_CLUSTER_RESET_ALL =        0x08010100,
++	MFI_DCMD_CLUSTER_RESET_LD =         0x08010200
++} mfi_dcmd_t;
++
++/* Modifiers for MFI_DCMD_CTRL_FLUSHCACHE */
++#define MFI_FLUSHCACHE_CTRL     0x01
++#define MFI_FLUSHCACHE_DISK     0x02
++
++/* Modifiers for MFI_DCMD_CTRL_SHUTDOWN */
++#define MFI_SHUTDOWN_SPINDOWN   0x01
++
++/*
++ * MFI Frame flags
++ */
++typedef enum {
++	MFI_FRAME_DONT_POST_IN_REPLY_QUEUE =        0x0001,
++	MFI_FRAME_SGL64 =                           0x0002,
++	MFI_FRAME_SENSE64 =                         0x0004,
++	MFI_FRAME_DIR_WRITE =                       0x0008,
++	MFI_FRAME_DIR_READ =                        0x0010,
++	MFI_FRAME_IEEE_SGL =                        0x0020,
++} mfi_frame_flags;
++
++/* MFI Status codes */
++typedef enum {
++	MFI_STAT_OK =                       0x00,
++	MFI_STAT_INVALID_CMD,
++	MFI_STAT_INVALID_DCMD,
++	MFI_STAT_INVALID_PARAMETER,
++	MFI_STAT_INVALID_SEQUENCE_NUMBER,
++	MFI_STAT_ABORT_NOT_POSSIBLE,
++	MFI_STAT_APP_HOST_CODE_NOT_FOUND,
++	MFI_STAT_APP_IN_USE,
++	MFI_STAT_APP_NOT_INITIALIZED,
++	MFI_STAT_ARRAY_INDEX_INVALID,
++	MFI_STAT_ARRAY_ROW_NOT_EMPTY,
++	MFI_STAT_CONFIG_RESOURCE_CONFLICT,
++	MFI_STAT_DEVICE_NOT_FOUND,
++	MFI_STAT_DRIVE_TOO_SMALL,
++	MFI_STAT_FLASH_ALLOC_FAIL,
++	MFI_STAT_FLASH_BUSY,
++	MFI_STAT_FLASH_ERROR =              0x10,
++	MFI_STAT_FLASH_IMAGE_BAD,
++	MFI_STAT_FLASH_IMAGE_INCOMPLETE,
++	MFI_STAT_FLASH_NOT_OPEN,
++	MFI_STAT_FLASH_NOT_STARTED,
++	MFI_STAT_FLUSH_FAILED,
++	MFI_STAT_HOST_CODE_NOT_FOUNT,
++	MFI_STAT_LD_CC_IN_PROGRESS,
++	MFI_STAT_LD_INIT_IN_PROGRESS,
++	MFI_STAT_LD_LBA_OUT_OF_RANGE,
++	MFI_STAT_LD_MAX_CONFIGURED,
++	MFI_STAT_LD_NOT_OPTIMAL,
++	MFI_STAT_LD_RBLD_IN_PROGRESS,
++	MFI_STAT_LD_RECON_IN_PROGRESS,
++	MFI_STAT_LD_WRONG_RAID_LEVEL,
++	MFI_STAT_MAX_SPARES_EXCEEDED,
++	MFI_STAT_MEMORY_NOT_AVAILABLE =     0x20,
++	MFI_STAT_MFC_HW_ERROR,
++	MFI_STAT_NO_HW_PRESENT,
++	MFI_STAT_NOT_FOUND,
++	MFI_STAT_NOT_IN_ENCL,
++	MFI_STAT_PD_CLEAR_IN_PROGRESS,
++	MFI_STAT_PD_TYPE_WRONG,
++	MFI_STAT_PR_DISABLED,
++	MFI_STAT_ROW_INDEX_INVALID,
++	MFI_STAT_SAS_CONFIG_INVALID_ACTION,
++	MFI_STAT_SAS_CONFIG_INVALID_DATA,
++	MFI_STAT_SAS_CONFIG_INVALID_PAGE,
++	MFI_STAT_SAS_CONFIG_INVALID_TYPE,
++	MFI_STAT_SCSI_DONE_WITH_ERROR,
++	MFI_STAT_SCSI_IO_FAILED,
++	MFI_STAT_SCSI_RESERVATION_CONFLICT,
++	MFI_STAT_SHUTDOWN_FAILED =          0x30,
++	MFI_STAT_TIME_NOT_SET,
++	MFI_STAT_WRONG_STATE,
++	MFI_STAT_LD_OFFLINE,
++	MFI_STAT_PEER_NOTIFICATION_REJECTED,
++	MFI_STAT_PEER_NOTIFICATION_FAILED,
++	MFI_STAT_RESERVATION_IN_PROGRESS,
++	MFI_STAT_I2C_ERRORS_DETECTED,
++	MFI_STAT_PCI_ERRORS_DETECTED,
++	MFI_STAT_DIAG_FAILED,
++	MFI_STAT_BOOT_MSG_PENDING,
++	MFI_STAT_FOREIGN_CONFIG_INCOMPLETE,
++	MFI_STAT_INVALID_SGL,
++	MFI_STAT_UNSUPPORTED_HW,
++	MFI_STAT_CC_SCHEDULE_DISABLED,
++	MFI_STAT_PD_COPYBACK_IN_PROGRESS,
++	MFI_STAT_MULTIPLE_PDS_IN_ARRAY =    0x40,
++	MFI_STAT_FW_DOWNLOAD_ERROR,
++	MFI_STAT_FEATURE_SECURITY_NOT_ENABLED,
++	MFI_STAT_LOCK_KEY_ALREADY_EXISTS,
++	MFI_STAT_LOCK_KEY_BACKUP_NOT_ALLOWED,
++	MFI_STAT_LOCK_KEY_VERIFY_NOT_ALLOWED,
++	MFI_STAT_LOCK_KEY_VERIFY_FAILED,
++	MFI_STAT_LOCK_KEY_REKEY_NOT_ALLOWED,
++	MFI_STAT_LOCK_KEY_INVALID,
++	MFI_STAT_LOCK_KEY_ESCROW_INVALID,
++	MFI_STAT_LOCK_KEY_BACKUP_REQUIRED,
++	MFI_STAT_SECURE_LD_EXISTS,
++	MFI_STAT_LD_SECURE_NOT_ALLOWED,
++	MFI_STAT_REPROVISION_NOT_ALLOWED,
++	MFI_STAT_PD_SECURITY_TYPE_WRONG,
++	MFI_STAT_LD_ENCRYPTION_TYPE_INVALID,
++	MFI_STAT_CONFIG_FDE_NON_FDE_MIX_NOT_ALLOWED = 0x50,
++	MFI_STAT_CONFIG_LD_ENCRYPTION_TYPE_MIX_NOT_ALLOWED,
++	MFI_STAT_SECRET_KEY_NOT_ALLOWED,
++	MFI_STAT_PD_HW_ERRORS_DETECTED,
++	MFI_STAT_LD_CACHE_PINNED,
++	MFI_STAT_POWER_STATE_SET_IN_PROGRESS,
++	MFI_STAT_POWER_STATE_SET_BUSY,
++	MFI_STAT_POWER_STATE_WRONG,
++	MFI_STAT_PR_NO_AVAILABLE_PD_FOUND,
++	MFI_STAT_CTRL_RESET_REQUIRED,
++	MFI_STAT_LOCK_KEY_EKM_NO_BOOT_AGENT,
++	MFI_STAT_SNAP_NO_SPACE,
++	MFI_STAT_SNAP_PARTIAL_FAILURE,
++	MFI_STAT_UPGRADE_KEY_INCOMPATIBLE,
++	MFI_STAT_PFK_INCOMPATIBLE,
++	MFI_STAT_PD_MAX_UNCONFIGURED,
++	MFI_STAT_IO_METRICS_DISABLED =      0x60,
++	MFI_STAT_AEC_NOT_STOPPED,
++	MFI_STAT_PI_TYPE_WRONG,
++	MFI_STAT_LD_PD_PI_INCOMPATIBLE,
++	MFI_STAT_PI_NOT_ENABLED,
++	MFI_STAT_LD_BLOCK_SIZE_MISMATCH,
++	MFI_STAT_INVALID_STATUS =           0xFF
++} mfi_status_t;
++
++/* Event classes */
++typedef enum {
++	MFI_EVT_CLASS_DEBUG =      -2,
++	MFI_EVT_CLASS_PROGRESS =   -1,
++	MFI_EVT_CLASS_INFO =        0,
++	MFI_EVT_CLASS_WARNING =     1,
++	MFI_EVT_CLASS_CRITICAL =    2,
++	MFI_EVT_CLASS_FATAL =       3,
++	MFI_EVT_CLASS_DEAD =        4
++} mfi_evt_class_t;
++
++/* Event locales */
++typedef enum {
++	MFI_EVT_LOCALE_LD =         0x0001,
++	MFI_EVT_LOCALE_PD =         0x0002,
++	MFI_EVT_LOCALE_ENCL =       0x0004,
++	MFI_EVT_LOCALE_BBU =        0x0008,
++	MFI_EVT_LOCALE_SAS =        0x0010,
++	MFI_EVT_LOCALE_CTRL =       0x0020,
++	MFI_EVT_LOCALE_CONFIG =     0x0040,
++	MFI_EVT_LOCALE_CLUSTER =    0x0080,
++	MFI_EVT_LOCALE_ALL =        0xffff
++} mfi_evt_locale_t;
++
++/* Event args */
++typedef enum {
++	MR_EVT_ARGS_NONE =          0x00,
++	MR_EVT_ARGS_CDB_SENSE,
++	MR_EVT_ARGS_LD,
++	MR_EVT_ARGS_LD_COUNT,
++	MR_EVT_ARGS_LD_LBA,
++	MR_EVT_ARGS_LD_OWNER,
++	MR_EVT_ARGS_LD_LBA_PD_LBA,
++	MR_EVT_ARGS_LD_PROG,
++	MR_EVT_ARGS_LD_STATE,
++	MR_EVT_ARGS_LD_STRIP,
++	MR_EVT_ARGS_PD,
++	MR_EVT_ARGS_PD_ERR,
++	MR_EVT_ARGS_PD_LBA,
++	MR_EVT_ARGS_PD_LBA_LD,
++	MR_EVT_ARGS_PD_PROG,
++	MR_EVT_ARGS_PD_STATE,
++	MR_EVT_ARGS_PCI,
++	MR_EVT_ARGS_RATE,
++	MR_EVT_ARGS_STR,
++	MR_EVT_ARGS_TIME,
++	MR_EVT_ARGS_ECC,
++	MR_EVT_ARGS_LD_PROP,
++	MR_EVT_ARGS_PD_SPARE,
++	MR_EVT_ARGS_PD_INDEX,
++	MR_EVT_ARGS_DIAG_PASS,
++	MR_EVT_ARGS_DIAG_FAIL,
++	MR_EVT_ARGS_PD_LBA_LBA,
++	MR_EVT_ARGS_PORT_PHY,
++	MR_EVT_ARGS_PD_MISSING,
++	MR_EVT_ARGS_PD_ADDRESS,
++	MR_EVT_ARGS_BITMAP,
++	MR_EVT_ARGS_CONNECTOR,
++	MR_EVT_ARGS_PD_PD,
++	MR_EVT_ARGS_PD_FRU,
++	MR_EVT_ARGS_PD_PATHINFO,
++	MR_EVT_ARGS_PD_POWER_STATE,
++	MR_EVT_ARGS_GENERIC,
++} mfi_evt_args;
++
++/* Event codes */
++#define MR_EVT_CFG_CLEARED                          0x0004
++#define MR_EVT_CTRL_SHUTDOWN                        0x002a
++#define MR_EVT_LD_STATE_CHANGE                      0x0051
++#define MR_EVT_PD_INSERTED                          0x005b
++#define MR_EVT_PD_REMOVED                           0x0070
++#define MR_EVT_PD_STATE_CHANGED                     0x0072
++#define MR_EVT_LD_CREATED                           0x008a
++#define MR_EVT_LD_DELETED                           0x008b
++#define MR_EVT_FOREIGN_CFG_IMPORTED                 0x00db
++#define MR_EVT_LD_OFFLINE                           0x00fc
++#define MR_EVT_CTRL_HOST_BUS_SCAN_REQUESTED         0x0152
++
++typedef enum {
++	MR_LD_CACHE_WRITE_BACK =            0x01,
++	MR_LD_CACHE_WRITE_ADAPTIVE =        0x02,
++	MR_LD_CACHE_READ_AHEAD =            0x04,
++	MR_LD_CACHE_READ_ADAPTIVE =         0x08,
++	MR_LD_CACHE_WRITE_CACHE_BAD_BBU =   0x10,
++	MR_LD_CACHE_ALLOW_WRITE_CACHE =     0x20,
++	MR_LD_CACHE_ALLOW_READ_CACHE =      0x40
++} mfi_ld_cache;
++
++typedef enum {
++	MR_PD_CACHE_UNCHANGED  =    0,
++	MR_PD_CACHE_ENABLE =        1,
++	MR_PD_CACHE_DISABLE =       2
++} mfi_pd_cache;
++
++typedef enum {
++	MR_PD_QUERY_TYPE_ALL =              0,
++	MR_PD_QUERY_TYPE_STATE =            1,
++	MR_PD_QUERY_TYPE_POWER_STATE =      2,
++	MR_PD_QUERY_TYPE_MEDIA_TYPE =       3,
++	MR_PD_QUERY_TYPE_SPEED =            4,
++	MR_PD_QUERY_TYPE_EXPOSED_TO_HOST =  5, /*query for system drives */
++} mfi_pd_query_type;
++
++/*
++ * Other propertities and definitions
++ */
++#define MFI_MAX_PD_CHANNELS     2
++#define MFI_MAX_LD_CHANNELS     2
++#define MFI_MAX_CHANNELS        (MFI_MAX_PD_CHANNELS + MFI_MAX_LD_CHANNELS)
++#define MFI_MAX_CHANNEL_DEVS  128
++#define MFI_DEFAULT_ID         -1
++
++#define MFI_FRAME_SIZE         64
++#define MFI_MBOX_SIZE          12
++
++/* Firmware flashing can take 40s */
++#define MFI_POLL_TIMEOUT_SECS  50
++
++/* Scatter Gather elements */
++struct mfi_sg32 {
++	u32 addr;
++	u32 len;
++} __attribute__((packed));
++
++struct mfi_sg64 {
++	u64 addr;
++	u32 len;
++} __attribute__((packed));
++
++struct mfi_sg_skinny {
++	u64 addr;
++	u32 len;
++	u32 flag;
++} __attribute__((packed));
++
++union mfi_sgl {
++	struct mfi_sg32 sg32[1];
++	struct mfi_sg64 sg64[1];
++	struct mfi_sg_skinny sg_skinny[1];
++} __attribute__((packed));
++
++/* Message frames.  All messages have a common header */
++struct mfi_frame_header {
++	u8 frame_cmd;
++	u8 sense_len;
++	u8 cmd_status;
++	u8 scsi_status;
++	u8 target_id;
++	u8 lun_id;
++	u8 cdb_len;
++	u8 sge_count;
++	u64 context;
++	u16 flags;
++	u16 timeout;
++	u32 data_len;
++} __attribute__((packed));
++
++struct mfi_init_frame {
++	struct mfi_frame_header header;
++	u32 qinfo_new_addr_lo;
++	u32 qinfo_new_addr_hi;
++	u32 qinfo_old_addr_lo;
++	u32 qinfo_old_addr_hi;
++	u32 reserved[6];
++};
++
++#define MFI_IO_FRAME_SIZE 40
++struct mfi_io_frame {
++	struct mfi_frame_header header;
++	u32 sense_addr_lo;
++	u32 sense_addr_hi;
++	u32 lba_lo;
++	u32 lba_hi;
++	union mfi_sgl sgl;
++} __attribute__((packed));
++
++#define MFI_PASS_FRAME_SIZE 48
++struct mfi_pass_frame {
++	struct mfi_frame_header header;
++	u32 sense_addr_lo;
++	u32 sense_addr_hi;
++	u8 cdb[16];
++	union mfi_sgl sgl;
++} __attribute__((packed));
++
++#define MFI_DCMD_FRAME_SIZE 40
++struct mfi_dcmd_frame {
++	struct mfi_frame_header header;
++	u32 opcode;
++	u8 mbox[MFI_MBOX_SIZE];
++	union mfi_sgl sgl;
++} __attribute__((packed));
++
++struct mfi_abort_frame {
++	struct mfi_frame_header header;
++	u64 abort_context;
++	u32 abort_mfi_addr_lo;
++	u32 abort_mfi_addr_hi;
++	u32 reserved1[6];
++} __attribute__((packed));
++
++struct mfi_smp_frame {
++	struct mfi_frame_header header;
++	u64 sas_addr;
++	union {
++		struct mfi_sg32 sg32[2];
++		struct mfi_sg64 sg64[2];
++	} sgl;
++} __attribute__((packed));
++
++struct mfi_stp_frame {
++	struct mfi_frame_header header;
++	u16 fis[10];
++	u32 stp_flags;
++	union {
++		struct mfi_sg32 sg32[2];
++		struct mfi_sg64 sg64[2];
++	} sgl;
++} __attribute__((packed));
++
++union mfi_frame {
++	struct mfi_frame_header header;
++	struct mfi_init_frame init;
++	struct mfi_io_frame io;
++	struct mfi_pass_frame pass;
++	struct mfi_dcmd_frame dcmd;
++	struct mfi_abort_frame abort;
++	struct mfi_smp_frame smp;
++	struct mfi_stp_frame stp;
++	u64 raw[8];
++	u8 bytes[MFI_FRAME_SIZE];
++};
++
++#define MFI_SENSE_LEN 128
++struct mfi_sense {
++	u8     data[MFI_SENSE_LEN];
++};
++
++#define MFI_QUEUE_FLAG_CONTEXT64 0x00000002
++
++/* The queue init structure that is passed with the init message */
++struct mfi_init_qinfo {
++	u32 flags;
++	u32 rq_entries;
++	u32 rq_addr_lo;
++	u32 rq_addr_hi;
++	u32 pi_addr_lo;
++	u32 pi_addr_hi;
++	u32 ci_addr_lo;
++	u32 ci_addr_hi;
++} __attribute__((packed));
++
++/* Controller properties */
++struct mfi_ctrl_props {
++	u16 seq_num;
++	u16 pred_fail_poll_interval;
++	u16 intr_throttle_cnt;
++	u16 intr_throttle_timeout;
++	u8 rebuild_rate;
++	u8 patrol_read_rate;
++	u8 bgi_rate;
++	u8 cc_rate;
++	u8 recon_rate;
++	u8 cache_flush_interval;
++	u8 spinup_drv_cnt;
++	u8 spinup_delay;
++	u8 cluster_enable;
++	u8 coercion_mode;
++	u8 alarm_enable;
++	u8 disable_auto_rebuild;
++	u8 disable_battery_warn;
++	u8 ecc_bucket_size;
++	u16 ecc_bucket_leak_rate;
++	u8 restore_hotspare_on_insertion;
++	u8 expose_encl_devices;
++	u8 maintainPdFailHistory;
++	u8 disallowHostRequestReordering;
++	u8 abortCCOnError;
++	u8 loadBalanceMode;
++	u8 disableAutoDetectBackplane;
++	u8 snapVDSpace;
++	u32 OnOffProperties;
++/* set TRUE to disable copyBack (0=copyback enabled) */
++#define MFI_CTRL_PROP_CopyBackDisabled           (1 << 0)
++#define MFI_CTRL_PROP_SMARTerEnabled             (1 << 1)
++#define MFI_CTRL_PROP_PRCorrectUnconfiguredAreas (1 << 2)
++#define MFI_CTRL_PROP_UseFdeOnly                 (1 << 3)
++#define MFI_CTRL_PROP_DisableNCQ                 (1 << 4)
++#define MFI_CTRL_PROP_SSDSMARTerEnabled          (1 << 5)
++#define MFI_CTRL_PROP_SSDPatrolReadEnabled       (1 << 6)
++#define MFI_CTRL_PROP_EnableSpinDownUnconfigured (1 << 7)
++#define MFI_CTRL_PROP_AutoEnhancedImport         (1 << 8)
++#define MFI_CTRL_PROP_EnableSecretKeyControl     (1 << 9)
++#define MFI_CTRL_PROP_DisableOnlineCtrlReset     (1 << 10)
++#define MFI_CTRL_PROP_AllowBootWithPinnedCache   (1 << 11)
++#define MFI_CTRL_PROP_DisableSpinDownHS          (1 << 12)
++#define MFI_CTRL_PROP_EnableJBOD                 (1 << 13)
++
++	u8 autoSnapVDSpace; /* % of source LD to be
++				  * reserved for auto snapshot
++				  * in snapshot repository, for
++				  * metadata and user data
++				  * 1=5%, 2=10%, 3=15% and so on
++				  */
++	u8 viewSpace;       /* snapshot writeable VIEWs
++				  * capacity as a % of source LD
++				  * capacity. 0=READ only
++				  * 1=5%, 2=10%, 3=15% and so on
++				  */
++	u16 spinDownTime;    /* # of idle minutes before device
++				   * is spun down (0=use FW defaults)
++				   */
++	u8 reserved[24];
++} __attribute__((packed));
++
++/* PCI information about the card. */
++struct mfi_info_pci {
++	u16 vendor;
++	u16 device;
++	u16 subvendor;
++	u16 subdevice;
++	u8 reserved[24];
++} __attribute__((packed));
++
++/* Host (front end) interface information */
++struct mfi_info_host {
++	u8 type;
++#define MFI_INFO_HOST_PCIX      0x01
++#define MFI_INFO_HOST_PCIE      0x02
++#define MFI_INFO_HOST_ISCSI     0x04
++#define MFI_INFO_HOST_SAS3G     0x08
++	u8 reserved[6];
++	u8 port_count;
++	u64 port_addr[8];
++} __attribute__((packed));
++
++/* Device (back end) interface information */
++struct mfi_info_device {
++	u8 type;
++#define MFI_INFO_DEV_SPI        0x01
++#define MFI_INFO_DEV_SAS3G      0x02
++#define MFI_INFO_DEV_SATA1      0x04
++#define MFI_INFO_DEV_SATA3G     0x08
++#define MFI_INFO_DEV_PCIE       0x10
++	u8 reserved[6];
++	u8 port_count;
++	u64 port_addr[8];
++} __attribute__((packed));
++
++/* Firmware component information */
++struct mfi_info_component {
++	char name[8];
++	char version[32];
++	char build_date[16];
++	char build_time[16];
++} __attribute__((packed));
++
++/* Controller default settings */
++struct mfi_defaults {
++	u64 sas_addr;
++	u8 phy_polarity;
++	u8 background_rate;
++	u8 stripe_size;
++	u8 flush_time;
++	u8 write_back;
++	u8 read_ahead;
++	u8 cache_when_bbu_bad;
++	u8 cached_io;
++	u8 smart_mode;
++	u8 alarm_disable;
++	u8 coercion;
++	u8 zrc_config;
++	u8 dirty_led_shows_drive_activity;
++	u8 bios_continue_on_error;
++	u8 spindown_mode;
++	u8 allowed_device_types;
++	u8 allow_mix_in_enclosure;
++	u8 allow_mix_in_ld;
++	u8 allow_sata_in_cluster;
++	u8 max_chained_enclosures;
++	u8 disable_ctrl_r;
++	u8 enable_web_bios;
++	u8 phy_polarity_split;
++	u8 direct_pd_mapping;
++	u8 bios_enumerate_lds;
++	u8 restored_hot_spare_on_insertion;
++	u8 expose_enclosure_devices;
++	u8 maintain_pd_fail_history;
++	u8 disable_puncture;
++	u8 zero_based_enumeration;
++	u8 disable_preboot_cli;
++	u8 show_drive_led_on_activity;
++	u8 cluster_disable;
++	u8 sas_disable;
++	u8 auto_detect_backplane;
++	u8 fde_only;
++	u8 delay_during_post;
++	u8 resv[19];
++} __attribute__((packed));
++
++/* Controller default settings */
++struct mfi_bios_data {
++	u16 boot_target_id;
++	u8 do_not_int_13;
++	u8 continue_on_error;
++	u8 verbose;
++	u8 geometry;
++	u8 expose_all_drives;
++	u8 reserved[56];
++	u8 check_sum;
++} __attribute__((packed));
++
++/* SAS (?) controller info, returned from MFI_DCMD_CTRL_GETINFO. */
++struct mfi_ctrl_info {
++	struct mfi_info_pci pci;
++	struct mfi_info_host host;
++	struct mfi_info_device device;
++
++	/* Firmware components that are present and active. */
++	u32 image_check_word;
++	u32 image_component_count;
++	struct mfi_info_component image_component[8];
++
++	/* Firmware components that have been flashed but are inactive */
++	u32 pending_image_component_count;
++	struct mfi_info_component pending_image_component[8];
++
++	u8 max_arms;
++	u8 max_spans;
++	u8 max_arrays;
++	u8 max_lds;
++	char product_name[80];
++	char serial_number[32];
++	u32 hw_present;
++#define MFI_INFO_HW_BBU         0x01
++#define MFI_INFO_HW_ALARM       0x02
++#define MFI_INFO_HW_NVRAM       0x04
++#define MFI_INFO_HW_UART        0x08
++#define MFI_INFO_HW_MEM         0x10
++#define MFI_INFO_HW_FLASH       0x20
++	u32 current_fw_time;
++	u16 max_cmds;
++	u16 max_sg_elements;
++	u32 max_request_size;
++	u16 lds_present;
++	u16 lds_degraded;
++	u16 lds_offline;
++	u16 pd_present;
++	u16 pd_disks_present;
++	u16 pd_disks_pred_failure;
++	u16 pd_disks_failed;
++	u16 nvram_size;
++	u16 memory_size;
++	u16 flash_size;
++	u16 ram_correctable_errors;
++	u16 ram_uncorrectable_errors;
++	u8 cluster_allowed;
++	u8 cluster_active;
++	u16 max_strips_per_io;
++
++	u32 raid_levels;
++#define MFI_INFO_RAID_0         0x01
++#define MFI_INFO_RAID_1         0x02
++#define MFI_INFO_RAID_5         0x04
++#define MFI_INFO_RAID_1E        0x08
++#define MFI_INFO_RAID_6         0x10
++
++	u32 adapter_ops;
++#define MFI_INFO_AOPS_RBLD_RATE         0x0001
++#define MFI_INFO_AOPS_CC_RATE           0x0002
++#define MFI_INFO_AOPS_BGI_RATE          0x0004
++#define MFI_INFO_AOPS_RECON_RATE        0x0008
++#define MFI_INFO_AOPS_PATROL_RATE       0x0010
++#define MFI_INFO_AOPS_ALARM_CONTROL     0x0020
++#define MFI_INFO_AOPS_CLUSTER_SUPPORTED 0x0040
++#define MFI_INFO_AOPS_BBU               0x0080
++#define MFI_INFO_AOPS_SPANNING_ALLOWED  0x0100
++#define MFI_INFO_AOPS_DEDICATED_SPARES  0x0200
++#define MFI_INFO_AOPS_REVERTIBLE_SPARES 0x0400
++#define MFI_INFO_AOPS_FOREIGN_IMPORT    0x0800
++#define MFI_INFO_AOPS_SELF_DIAGNOSTIC   0x1000
++#define MFI_INFO_AOPS_MIXED_ARRAY       0x2000
++#define MFI_INFO_AOPS_GLOBAL_SPARES     0x4000
++
++	u32 ld_ops;
++#define MFI_INFO_LDOPS_READ_POLICY      0x01
++#define MFI_INFO_LDOPS_WRITE_POLICY     0x02
++#define MFI_INFO_LDOPS_IO_POLICY        0x04
++#define MFI_INFO_LDOPS_ACCESS_POLICY    0x08
++#define MFI_INFO_LDOPS_DISK_CACHE_POLICY 0x10
++
++	struct {
++		u8 min;
++		u8 max;
++		u8 reserved[2];
++	} __attribute__((packed)) stripe_sz_ops;
++
++	u32 pd_ops;
++#define MFI_INFO_PDOPS_FORCE_ONLINE     0x01
++#define MFI_INFO_PDOPS_FORCE_OFFLINE    0x02
++#define MFI_INFO_PDOPS_FORCE_REBUILD    0x04
++
++	u32 pd_mix_support;
++#define MFI_INFO_PDMIX_SAS              0x01
++#define MFI_INFO_PDMIX_SATA             0x02
++#define MFI_INFO_PDMIX_ENCL             0x04
++#define MFI_INFO_PDMIX_LD               0x08
++#define MFI_INFO_PDMIX_SATA_CLUSTER     0x10
++
++	u8 ecc_bucket_count;
++	u8 reserved2[11];
++	struct mfi_ctrl_props properties;
++	char package_version[0x60];
++	u8 pad[0x800 - 0x6a0];
++} __attribute__((packed));
++
++/* keep track of an event. */
++union mfi_evt {
++	struct {
++		u16 locale;
++		u8 reserved;
++		int8_t class;
++	} members;
++	u32 word;
++} __attribute__((packed));
++
++/* event log state. */
++struct mfi_evt_log_state {
++	u32 newest_seq_num;
++	u32 oldest_seq_num;
++	u32 clear_seq_num;
++	u32 shutdown_seq_num;
++	u32 boot_seq_num;
++} __attribute__((packed));
++
++struct mfi_progress {
++	u16 progress;
++	u16 elapsed_seconds;
++} __attribute__((packed));
++
++struct mfi_evt_ld {
++	u16 target_id;
++	u8 ld_index;
++	u8 reserved;
++} __attribute__((packed));
++
++struct mfi_evt_pd {
++	u16 device_id;
++	u8 enclosure_index;
++	u8 slot_number;
++} __attribute__((packed));
++
++/* event detail, returned from MFI_DCMD_CTRL_EVENT_WAIT. */
++struct mfi_evt_detail {
++	u32 seq;
++	u32 time;
++	u32 code;
++	union mfi_evt class;
++	u8 arg_type;
++	u8 reserved1[15];
++
++	union {
++		struct {
++			struct mfi_evt_pd pd;
++			u8 cdb_len;
++			u8 sense_len;
++			u8 reserved[2];
++			u8 cdb[16];
++			u8 sense[64];
++		} cdb_sense;
++
++		struct mfi_evt_ld ld;
++
++		struct {
++			struct mfi_evt_ld ld;
++			u64 count;
++		} ld_count;
++
++		struct {
++			u64 lba;
++			struct mfi_evt_ld ld;
++		} ld_lba;
++
++		struct {
++			struct mfi_evt_ld ld;
++			u32 pre_owner;
++			u32 new_owner;
++		} ld_owner;
++
++		struct {
++			u64 ld_lba;
++			u64 pd_lba;
++			struct mfi_evt_ld ld;
++			struct mfi_evt_pd pd;
++		} ld_lba_pd_lba;
++
++		struct {
++			struct mfi_evt_ld ld;
++			struct mfi_progress prog;
++		} ld_prog;
++
++		struct {
++			struct mfi_evt_ld ld;
++			u32 prev_state;
++			u32 new_state;
++		} ld_state;
++
++		struct {
++			u64 strip;
++			struct mfi_evt_ld ld;
++		} ld_strip;
++
++		struct mfi_evt_pd pd;
++
++		struct {
++			struct mfi_evt_pd pd;
++			u32 err;
++		} pd_err;
++
++		struct {
++			u64 lba;
++			struct mfi_evt_pd pd;
++		} pd_lba;
++
++		struct {
++			u64 lba;
++			struct mfi_evt_pd pd;
++			struct mfi_evt_ld ld;
++		} pd_lba_ld;
++
++		struct {
++			struct mfi_evt_pd pd;
++			struct mfi_progress prog;
++		} pd_prog;
++
++		struct {
++			struct mfi_evt_pd ld;
++			u32 prev_state;
++			u32 new_state;
++		} pd_state;
++
++		struct {
++			u16 venderId;
++			u16 deviceId;
++			u16 subVenderId;
++			u16 subDeviceId;
++		} pci;
++
++		u32 rate;
++
++		char str[96];
++
++		struct {
++			u32 rtc;
++			u16 elapsedSeconds;
++		} time;
++
++		struct {
++			u32 ecar;
++			u32 elog;
++			char str[64];
++		} ecc;
++
++		u8 b[96];
++		u16 s[48];
++		u32 w[24];
++		u64 d[12];
++	} args;
++
++	char description[128];
++} __attribute__((packed));
++
++struct mfi_evt_list {
++	u32 count;
++	u32 reserved;
++	struct mfi_evt_detail event[1];
++} __attribute__((packed));
++
++union mfi_pd_ref {
++	struct {
++		u16 device_id;
++		u16 seq_num;
++	} v;
++	u32 ref;
++} __attribute__((packed));
++
++union mfi_pd_ddf_type {
++	struct {
++		u16 pd_type;
++#define MFI_PD_DDF_TYPE_FORCED_PD_GUID (1 << 0)
++#define MFI_PD_DDF_TYPE_IN_VD          (1 << 1)
++#define MFI_PD_DDF_TYPE_IS_GLOBAL_SPARE (1 << 2)
++#define MFI_PD_DDF_TYPE_IS_SPARE        (1 << 3)
++#define MFI_PD_DDF_TYPE_IS_FOREIGN      (1 << 4)
++#define MFI_PD_DDF_TYPE_INTF_SPI        (1 << 12)
++#define MFI_PD_DDF_TYPE_INTF_SAS        (1 << 13)
++#define MFI_PD_DDF_TYPE_INTF_SATA1      (1 << 14)
++#define MFI_PD_DDF_TYPE_INTF_SATA3G     (1 << 15)
++		u16 reserved;
++	} ddf;
++	struct {
++		u32 reserved;
++	} non_disk;
++	u32 type;
++} __attribute__((packed));
++
++struct mfi_pd_progress {
++	u32 active;
++#define PD_PROGRESS_ACTIVE_REBUILD (1 << 0)
++#define PD_PROGRESS_ACTIVE_PATROL  (1 << 1)
++#define PD_PROGRESS_ACTIVE_CLEAR   (1 << 2)
++	struct mfi_progress rbld;
++	struct mfi_progress patrol;
++	struct mfi_progress clear;
++	struct mfi_progress reserved[4];
++} __attribute__((packed));
++
++struct mfi_pd_info {
++	union mfi_pd_ref ref;
++	u8 inquiry_data[96];
++	u8 vpd_page83[64];
++	u8 not_supported;
++	u8 scsi_dev_type;
++	u8 connected_port_bitmap;
++	u8 device_speed;
++	u32 media_err_count;
++	u32 other_err_count;
++	u32 pred_fail_count;
++	u32 last_pred_fail_event_seq_num;
++	u16 fw_state;
++	u8 disable_for_removal;
++	u8 link_speed;
++	union mfi_pd_ddf_type state;
++	struct {
++		u8 count;
++		u8 is_path_broken;
++		u8 reserved[6];
++		u64 sas_addr[4];
++	} path_info;
++	u64 raw_size;
++	u64 non_coerced_size;
++	u64 coerced_size;
++	u16 encl_device_id;
++	u8 encl_index;
++	u8 slot_number;
++	struct mfi_pd_progress prog_info;
++	u8 bad_block_table_full;
++	u8 unusable_in_current_config;
++	u8 vpd_page83_ext[64];
++	u8 reserved[512-358];
++} __attribute__((packed));
++
++struct mfi_pd_address {
++	u16 device_id;
++	u16 encl_device_id;
++	u8 encl_index;
++	u8 slot_number;
++	u8 scsi_dev_type;
++	u8 connect_port_bitmap;
++	u64 sas_addr[2];
++} __attribute__((packed));
++
++#define MFI_MAX_SYS_PDS 240
++struct mfi_pd_list {
++	u32 size;
++	u32 count;
++	struct mfi_pd_address addr[MFI_MAX_SYS_PDS];
++} __attribute__((packed));
++
++union mfi_ld_ref {
++	struct {
++		u8 target_id;
++		u8 lun_id;
++		u16 seq;
++	} v;
++	u32 ref;
++} __attribute__((packed));
++
++#define MFI_MAX_LDS 64
++struct mfi_ld_list {
++	u32 ld_count;
++	u32 reserved1;
++	struct {
++		union mfi_ld_ref ld;
++		u8 state;
++		u8 reserved2[3];
++		u64 size;
++	} ld_list[MFI_MAX_LDS];
++} __attribute__((packed));
++
++enum mfi_ld_access {
++	MFI_LD_ACCESS_RW =          0,
++	MFI_LD_ACCSSS_RO =          2,
++	MFI_LD_ACCESS_BLOCKED =     3,
++};
++#define MFI_LD_ACCESS_MASK      3
++
++enum mfi_ld_state {
++	MFI_LD_STATE_OFFLINE =              0,
++	MFI_LD_STATE_PARTIALLY_DEGRADED =   1,
++	MFI_LD_STATE_DEGRADED =             2,
++	MFI_LD_STATE_OPTIMAL =              3
++};
++
++enum mfi_syspd_state {
++	MFI_PD_STATE_UNCONFIGURED_GOOD =    0x00,
++	MFI_PD_STATE_UNCONFIGURED_BAD =     0x01,
++	MFI_PD_STATE_HOT_SPARE =            0x02,
++	MFI_PD_STATE_OFFLINE =              0x10,
++	MFI_PD_STATE_FAILED =               0x11,
++	MFI_PD_STATE_REBUILD =              0x14,
++	MFI_PD_STATE_ONLINE =               0x18,
++	MFI_PD_STATE_COPYBACK =             0x20,
++	MFI_PD_STATE_SYSTEM =               0x40
++};
++
++struct mfi_ld_props {
++	union mfi_ld_ref ld;
++	char name[16];
++	u8 default_cache_policy;
++	u8 access_policy;
++	u8 disk_cache_policy;
++	u8 current_cache_policy;
++	u8 no_bgi;
++	u8 reserved[7];
++} __attribute__((packed));
++
++struct mfi_ld_params {
++	u8 primary_raid_level;
++	u8 raid_level_qualifier;
++	u8 secondary_raid_level;
++	u8 stripe_size;
++	u8 num_drives;
++	u8 span_depth;
++	u8 state;
++	u8 init_state;
++	u8 is_consistent;
++	u8 reserved[23];
++} __attribute__((packed));
++
++struct mfi_ld_progress {
++	u32            active;
++#define MFI_LD_PROGRESS_CC      (1<<0)
++#define MFI_LD_PROGRESS_BGI     (1<<1)
++#define MFI_LD_PROGRESS_FGI     (1<<2)
++#define MFI_LD_PORGRESS_RECON   (1<<3)
++	struct mfi_progress cc;
++	struct mfi_progress bgi;
++	struct mfi_progress fgi;
++	struct mfi_progress recon;
++	struct mfi_progress reserved[4];
++} __attribute__((packed));
++
++struct mfi_span {
++	u64 start_block;
++	u64 num_blocks;
++	u16 array_ref;
++	u8 reserved[6];
++} __attribute__((packed));
++
++#define MFI_MAX_SPAN_DEPTH      8
++struct mfi_ld_config {
++	struct mfi_ld_props properties;
++	struct mfi_ld_params params;
++	struct mfi_span span[MFI_MAX_SPAN_DEPTH];
++} __attribute__((packed));
++
++struct mfi_ld_info {
++	struct mfi_ld_config ld_config;
++	u64 size;
++	struct mfi_ld_progress progress;
++	u16 cluster_owner;
++	u8 reconstruct_active;
++	u8 reserved1[1];
++	u8 vpd_page83[64];
++	u8 reserved2[16];
++} __attribute__((packed));
++
++union mfi_spare_type {
++	u8 flags;
++#define MFI_SPARE_IS_DEDICATED (1 << 0)
++#define MFI_SPARE_IS_REVERTABLE (1 << 1)
++#define MFI_SPARE_IS_ENCL_AFFINITY (1 << 2)
++	u8 type;
++} __attribute__((packed));
++
++#define MFI_MAX_ARRAYS 16
++struct mfi_spare {
++	union mfi_pd_ref ref;
++	union mfi_spare_type spare_type;
++	u8 reserved[2];
++	u8 array_count;
++	u16 array_refd[MFI_MAX_ARRAYS];
++} __attribute__((packed));
++
++#define MFI_MAX_ROW_SIZE 32
++struct mfi_array {
++	u64 size;
++	u8 num_drives;
++	u8 reserved;
++	u16 array_ref;
++	u8 pad[20];
++	struct {
++		union mfi_pd_ref ref;
++		u16 fw_state; /* enum mfi_syspd_state */
++		struct {
++			u8 pd;
++			u8 slot;
++		} encl;
++	} pd[MFI_MAX_ROW_SIZE];
++} __attribute__((packed));
++
++struct mfi_config_data {
++	u32 size;
++	u16 array_count;
++	u16 array_size;
++	u16 log_drv_count;
++	u16 log_drv_size;
++	u16 spares_count;
++	u16 spares_size;
++	u8 reserved[16];
++	/*
++	  struct mfi_array  array[];
++	  struct mfi_ld_config ld[];
++	  struct mfi_spare  spare[];
++	*/
++} __attribute__((packed));
++
++#define MFI_SCSI_MAX_TARGETS  128
++#define MFI_SCSI_MAX_LUNS       8
++#define MFI_SCSI_INITIATOR_ID 255
++#define MFI_SCSI_MAX_CMDS       8
++#define MFI_SCSI_MAX_CDB_LEN   16
++
++#endif /* MFI_REG_H */
+diff --git a/drivers/target/rts_megasas/rts_megasas.h b/drivers/target/rts_megasas/rts_megasas.h
+new file mode 100644
+index 0000000..b3d78dc
+--- /dev/null
++++ b/drivers/target/rts_megasas/rts_megasas.h
+@@ -0,0 +1,205 @@
++/*
++ * rts_megasas_base.h
++ *
++ * Copyright (c) 2012, RisingTide Systems LLC.
++ * All rights reserved.
++ */
++
++#ifndef _RTS_MEGASAS_H
++#define _RTS_MEGASAS_H
++
++#define RTS_MEGASAS_NAME "rts_megasas"
++#define RTS_MEGASAS_VERSION  "v0.3"
++#define RTS_MEGASAS_NAMELEN 32
++
++#define MEGASAS_MAX_FRAMES 2048		/* Firmware limit at 65535 */
++#define MEGASAS_DEFAULT_FRAMES 1000	/* Windows requires this */
++#define MEGASAS_MAX_SGE 128		/* Firmware limit */
++#define MEGASAS_DEFAULT_SGE 80		/* Firmware limit */
++#define MEGASAS_MAX_ARRAYS 128
++#define MEGASAS_FW_FRAMES 8		/* Firmware frame window size */
++
++struct rts_megasas_cmd {
++	u64 context;
++	u16 flags;
++	u16 pa_size;
++	u32 sgl_count;
++
++	void __user *pa;
++	void *frame_ptr;
++	struct page *frame_page[2];
++	union mfi_frame *frame;
++	struct scatterlist *sgl;
++	size_t sgl_size;
++	void *sgl_buf;
++	struct completion *complete;
++	/* Pointer to vhost nexus memory */
++	struct rts_megasas_nexus *rtm_nexus;
++	/* Pointer to originating HBA */
++	struct rts_megasas_hba *rtm_hba;
++	/* The TCM I/O descriptor that is accessed via container_of() */
++	struct se_cmd se_cmd;
++	/* work item used for cmwq dispatch to tcm_vhost_submission_work() */
++	struct work_struct work;
++	unsigned char cdb[16];
++	/* Sense buffer that will be mapped into outgoing status */
++	unsigned char sense_buf[SCSI_SENSE_BUFFERSIZE];
++	struct list_head list;
++};
++
++struct rts_megasas_tmr {
++	atomic_t tmr_complete;
++	wait_queue_head_t tmr_wait;
++};
++
++struct rts_megasas_nexus {
++	struct se_session *se_sess;
++};
++
++struct rts_megasas_nacl {
++	/* Binary World Wide unique Port Name for SAS Initiator port */
++	u64 iport_wwpn;
++	/* ASCII formatted WWPN for SAS Initiator port */
++	char iport_name[RTS_MEGASAS_NAMELEN];
++	/* Returned by rts_megasas_make_nodeacl() */
++	struct se_node_acl se_node_acl;
++};
++
++struct rts_megasas_tpg {
++	/* SAS port target portal group tag for TCM */
++	u16 tport_tpgt;
++	/* Track number of TPG Port/Lun links */
++	int tpg_port_count;
++	/* Track rts_megasas_hba references */
++	int tpg_hba_count;
++	struct list_head tpg_list;
++	struct mutex tpg_mutex;
++	struct rts_megasas_nexus *rtm_tpg_nexus;
++	struct rts_megasas_tport *rtm_tpg_tport;
++	/* Returned by rts_megasas_make_tpg() */
++	struct se_portal_group se_tpg;
++};
++
++struct rts_megasas_tport {
++	/* SCSI protocol the tport is providing */
++	u8 tport_proto_id;
++	/* Binary World Wide unique Port Name for Vhost Target port */
++	u64 tport_wwpn;
++	/* ASCII formatted WWPN for Vhost Target port */
++	char tport_name[RTS_MEGASAS_NAMELEN];
++	/* Returned by tcm_vhost_make_tport() */
++	struct se_wwn tport_wwn;
++};
++
++struct rts_megasas_hba {
++	int fw_state;
++	u32 fw_sge;
++	u32 fw_cmds;
++	u32 flags;
++	int fw_luns;
++
++	struct rts_megasas_cmd *event_cmd;
++	int event_locale;
++	int event_class;
++	int event_count;
++	int shutdown_event;
++	int boot_event;
++
++	char hba_serial[32];
++
++	void *reply_queue;
++	void *reply_queue_ptr;
++	struct page **reply_queue_pages;
++	void __user *consumer_pa;
++	void __user *producer_pa;
++	int reply_queue_len;
++	int reply_queue_head;
++	int reply_queue_tail;
++	int reply_queue_pgcount;
++	spinlock_t reply_queue_lock;
++
++	struct file *irqfd;
++	struct eventfd_ctx *irqfd_ctx;
++	struct file *doorbell_fd;
++	struct eventfd_ctx *doorbell_ctx;
++	struct mm_struct *mm;
++
++	struct mutex frame_lock;
++	struct list_head frame_list;
++	struct workqueue_struct *workqueue;
++	struct rts_megasas_tpg *rtm_tpg;
++	struct vhost_memory __rcu *memory;
++};
++
++struct rts_megasas_iocpacket {
++	u32 host_no;
++	u32 frame_count;
++	u32 sge_count;
++	u32 sense_len;
++
++	u8 __user *frame;
++	struct iovec __user sge[MEGASAS_MAX_SGE];
++	u8 __user *sense;
++} __attribute__ ((packed));
++
++struct rts_megasas_fwstate {
++	int fw_state;
++	int fw_sge;
++	int fw_cmds;
++} __attribute__ ((packed));
++
++struct rts_megasas_iocqueue {
++	int cur_head;
++	int new_head;
++} __attribute__ ((packed));
++
++struct rts_megasas_eventfd {
++	int irqfd;
++	int doorbellfd;
++} __attribute__ ((packed));
++
++#ifdef CONFIG_COMPAT
++struct compat_rts_megasas_iocpacket {
++	u32 host_no;
++	u32 frame_count;
++	u32 sge_count;
++	u32 sense_len;
++
++	union mfi_frame *frame;
++	struct compat_iovec sge[MEGASAS_MAX_SGE];
++	uint8_t *sense;
++} __attribute__ ((packed));
++
++
++#define MEGASAS_IOC_FIRMWARE32	_IOWR('M', 1, struct compat_rts_megasas_iocpacket)
++#endif
++
++#define MEGASAS_IOC_FIRMWARE	_IOWR('M', 1, struct rts_megasas_iocpacket)
++
++#define MEGASAS_IOC_EVENTFD     _IOWR('M', 4, struct rts_megasas_eventfd)
++#define MEGASAS_IOC_ENDPOINT	_IOWR('M', 5, unsigned long)
++#define MEGASAS_IOC_FRAME	_IOWR('M', 6, unsigned long)
++#define MEGASAS_IOC_FWSTATE	_IOWR('M', 7, struct rts_megasas_fwstate)
++#define MEGASAS_IOC_DOORBELL	_IOWR('M', 8, struct rts_megasas_iocqueue)
++
++/* rts_megasas_fabric.c */
++int rts_megasas_task_reset(struct rts_megasas_hba *hba,
++			   struct rts_megasas_cmd *cmd);
++int rts_megasas_register_configfs(void);
++int rts_megasas_set_endpoint(struct rts_megasas_hba *hba, int hba_id);
++int rts_megasas_clean_endpoint(struct rts_megasas_hba *hba);
++void __exit rts_megasas_deregister_configfs(void);
++
++/* rts_megasas.c */
++int rts_megasas_queue_tm_rsp(struct se_cmd *se_cmd);
++int rts_megasas_queue_status(struct se_cmd *se_cmd);
++int rts_megasas_queue_data_in(struct se_cmd *se_cmd);
++int rts_megasas_get_cmd_state(struct se_cmd *se_cmd);
++
++/* rts_megasas_vhost.c */
++const struct vhost_memory_region *find_region(struct rts_megasas_hba *hba,
++					      __u64 addr, __u32 len);
++long rts_megasas_set_memory(struct rts_megasas_hba *hba,
++			    struct vhost_memory __user *m);
++
++#endif /* _RTS_MEGASAS_H */
+diff --git a/drivers/target/rts_megasas/rts_megasas_fabric.c b/drivers/target/rts_megasas/rts_megasas_fabric.c
+new file mode 100644
+index 0000000..d796c5d
+--- /dev/null
++++ b/drivers/target/rts_megasas/rts_megasas_fabric.c
+@@ -0,0 +1,809 @@
++/*
++ * In-kernel MFI-SAS protocol emulation
++ * TCM Fabric functions
++ *
++ * Copyright (c) 2012 RisingTide Systems LLC.
++ *
++ */
++
++#define DEBUG
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/version.h>
++#include <generated/utsrelease.h>
++#include <linux/utsname.h>
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/kthread.h>
++#include <linux/types.h>
++#include <linux/string.h>
++#include <linux/configfs.h>
++#include <linux/ctype.h>
++#include <linux/pci_ids.h>
++#include <linux/time.h>
++#include <linux/rtc.h>
++#include <linux/eventfd.h>
++#include <asm/unaligned.h>
++#include <linux/vhost.h>
++
++#include <target/target_core_base.h>
++#include <target/target_core_fabric.h>
++#include <target/target_core_fabric_configfs.h>
++#include <target/target_core_configfs.h>
++#include <target/target_core_backend.h>
++#include <target/configfs_macros.h>
++
++#include <scsi/scsi.h>
++#include "mfi.h"
++#include "rts_megasas.h"
++
++/* Local pointer to allocated TCM configfs fabric module */
++struct target_fabric_configfs *rts_megasas_fabric_configfs;
++DEFINE_MUTEX(rts_megasas_mutex);
++LIST_HEAD(rts_megasas_tpg_list);
++
++/*
++ * Parse WWN.
++ * If strict, we require lower-case hex and colon separators to be sure
++ * the name is the same as what would be generated by ft_format_wwn()
++ * so the name and wwn are mapped one-to-one.
++ */
++static ssize_t rts_megasas_parse_wwn(const char *name, u64 *wwn, int strict)
++{
++	const char *cp;
++	char c;
++	u32 byte = 0;
++	u32 pos = 0;
++	u32 err;
++	int val;
++
++	if (strncmp(name, "naa.", 4)) {
++		pr_debug("invalid prefix for '%s'\n", name);
++		return -1;
++	}
++	*wwn = 0;
++	for (cp = name + 4; cp < &name[RTS_MEGASAS_NAMELEN - 1]; cp++) {
++		c = *cp;
++		if (c == '\n' && cp[1] == '\0')
++			continue;
++		if (strict && pos++ == 2 && byte++ < 7) {
++			pos = 0;
++			if (c == ':')
++				continue;
++			err = 1;
++			goto fail;
++		}
++		if (c == '\0') {
++			err = 2;
++			if (strict && byte != 8)
++				goto fail;
++			return cp - name;
++		}
++		err = 3;
++		val = hex_to_bin(c);
++		if (val < 0 || (strict && isupper(c)))
++			goto fail;
++		*wwn = (*wwn << 4) | val;
++	}
++	err = 4;
++fail:
++	pr_debug("err %u len %zu pos %u byte %u\n",
++		    err, cp - name, pos, byte);
++	return -1;
++}
++
++ssize_t rts_megasas_format_wwn(char *buf, size_t len, u64 wwn)
++{
++	u8 b[8];
++
++	put_unaligned_be64(wwn, b);
++	return snprintf(buf, len,
++		 "%2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x:%2.2x",
++		 b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
++}
++
++struct se_node_acl *
++rts_megasas_alloc_fabric_acl(struct se_portal_group *se_tpg)
++{
++	struct rts_megasas_nacl *nacl;
++
++	nacl = kzalloc(sizeof(struct rts_megasas_nacl), GFP_KERNEL);
++	if (!nacl) {
++		printk(KERN_ERR "Unable to allocate struct rts_megasas_nacl\n");
++		return NULL;
++	}
++	return &nacl->se_node_acl;
++}
++
++void
++rts_megasas_release_fabric_acl(struct se_portal_group *se_tpg,
++			       struct se_node_acl *se_nacl)
++{
++	struct rts_megasas_nacl *nacl = container_of(se_nacl,
++			struct rts_megasas_nacl, se_node_acl);
++	kfree(nacl);
++}
++
++static struct se_node_acl *rts_megasas_make_nodeacl(
++	struct se_portal_group *se_tpg,
++	struct config_group *group,
++	const char *name)
++{
++	struct se_node_acl *se_nacl, *se_nacl_new;
++	struct rts_megasas_nacl *nacl;
++	u64 wwpn = 0;
++	u32 nexus_depth;
++
++	if (rts_megasas_parse_wwn(name, &wwpn, 1) < 0)
++		return ERR_PTR(-EINVAL);
++	se_nacl_new = rts_megasas_alloc_fabric_acl(se_tpg);
++	if (!se_nacl_new)
++		return ERR_PTR(-ENOMEM);
++
++	/* ??? */
++	nexus_depth = 1;
++
++	/*
++	 * se_nacl_new may be released by core_tpg_add_initiator_node_acl()
++	 * when converting a NodeACL from demo mode -> explict
++	 */
++	se_nacl = core_tpg_add_initiator_node_acl(se_tpg, se_nacl_new,
++				name, nexus_depth);
++	if (IS_ERR(se_nacl)) {
++		rts_megasas_release_fabric_acl(se_tpg, se_nacl_new);
++		return se_nacl;
++	}
++	/*
++	 * Locate our struct rts_megasas_nacl and set the SAS WWPN
++	 */
++	nacl = container_of(se_nacl, struct rts_megasas_nacl, se_node_acl);
++	nacl->iport_wwpn = wwpn;
++
++	return se_nacl;
++}
++
++static void rts_megasas_drop_nodeacl(struct se_node_acl *se_acl)
++{
++	struct rts_megasas_nacl *nacl = container_of(se_acl,
++				struct rts_megasas_nacl, se_node_acl);
++	core_tpg_del_initiator_node_acl(se_acl->se_tpg, se_acl, 1);
++	kfree(nacl);
++}
++
++static int rts_megasas_make_nexus(struct rts_megasas_tpg *tpg,
++				  const char *name)
++{
++	struct se_portal_group *se_tpg;
++	struct rts_megasas_nexus *rtm_nexus;
++
++	mutex_lock(&tpg->tpg_mutex);
++	if (tpg->rtm_tpg_nexus) {
++		mutex_unlock(&tpg->tpg_mutex);
++		pr_debug("tpg->tpg_nexus already exists\n");
++		return -EEXIST;
++	}
++	se_tpg = &tpg->se_tpg;
++
++	rtm_nexus = kzalloc(sizeof(struct rts_megasas_nexus), GFP_KERNEL);
++	if (!rtm_nexus) {
++		mutex_unlock(&tpg->tpg_mutex);
++		pr_err("Unable to allocate struct rts_megasas_nexus\n");
++		return -ENOMEM;
++	}
++	/*
++	 *  Initialize the struct se_session pointer
++	 */
++	rtm_nexus->se_sess = transport_init_session();
++	if (IS_ERR(rtm_nexus->se_sess)) {
++		mutex_unlock(&tpg->tpg_mutex);
++		kfree(rtm_nexus);
++		return -ENOMEM;
++	}
++	/*
++	 * Since we are running in 'demo mode' this call with generate a
++	 * struct se_node_acl for the tcm_vhost struct se_portal_group with
++	 * the SCSI Initiator port name of the passed configfs group 'name'.
++	 */
++	rtm_nexus->se_sess->se_node_acl = core_tpg_check_initiator_node_acl(
++				se_tpg, (unsigned char *)name);
++	if (!rtm_nexus->se_sess->se_node_acl) {
++		mutex_unlock(&tpg->tpg_mutex);
++		pr_debug("core_tpg_check_initiator_node_acl() failed"
++				" for %s\n", name);
++		transport_free_session(rtm_nexus->se_sess);
++		kfree(rtm_nexus);
++		return -ENOMEM;
++	}
++	/*
++	 * Now register the TCM vhost virtual I_T Nexus as active with the
++	 * call to __transport_register_session()
++	 */
++	__transport_register_session(se_tpg, rtm_nexus->se_sess->se_node_acl,
++			rtm_nexus->se_sess, rtm_nexus);
++	tpg->rtm_tpg_nexus = rtm_nexus;
++
++	mutex_unlock(&tpg->tpg_mutex);
++	return 0;
++}
++
++static int rts_megasas_drop_nexus(struct rts_megasas_tpg *tpg)
++{
++	struct se_session *se_sess;
++	struct rts_megasas_nexus *nexus;
++
++	mutex_lock(&tpg->tpg_mutex);
++	nexus = tpg->rtm_tpg_nexus;
++	if (!nexus) {
++		mutex_unlock(&tpg->tpg_mutex);
++		return -ENODEV;
++	}
++
++	se_sess = nexus->se_sess;
++	if (!se_sess) {
++		mutex_unlock(&tpg->tpg_mutex);
++		return -ENODEV;
++	}
++
++	if (tpg->tpg_port_count != 0) {
++		mutex_unlock(&tpg->tpg_mutex);
++		pr_err("Unable to remove rts_megasas I_T Nexus with"
++			" active TPG port count: %d\n",
++			tpg->tpg_port_count);
++		return -EBUSY;
++	}
++
++	if (tpg->tpg_hba_count != 0) {
++		mutex_unlock(&tpg->tpg_mutex);
++		pr_err("Unable to remove rts_megasas I_T Nexus with"
++			" active TPG vhost count: %d\n",
++			tpg->tpg_hba_count);
++		return -EBUSY;
++	}
++
++	pr_debug("rts_megasas_ConfigFS: Removing I_T Nexus to emulated"
++		" SAS Initiator Port: %s\n",
++		 nexus->se_sess->se_node_acl->initiatorname);
++	/*
++	 * Release the SCSI I_T Nexus to the emulated vhost Target Port
++	 */
++	transport_deregister_session(nexus->se_sess);
++	tpg->rtm_tpg_nexus = NULL;
++	mutex_unlock(&tpg->tpg_mutex);
++
++	kfree(nexus);
++	return 0;
++}
++
++static ssize_t rts_megasas_tpg_show_nexus(struct se_portal_group *se_tpg,
++					  char *page)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++				struct rts_megasas_tpg, se_tpg);
++	struct rts_megasas_nexus *nexus;
++	ssize_t ret;
++
++	mutex_lock(&tpg->tpg_mutex);
++	nexus = tpg->rtm_tpg_nexus;
++	if (!nexus) {
++		mutex_unlock(&tpg->tpg_mutex);
++		return -ENODEV;
++	}
++	ret = snprintf(page, PAGE_SIZE, "%s\n",
++		       nexus->se_sess->se_node_acl->initiatorname);
++	mutex_unlock(&tpg->tpg_mutex);
++
++	return ret;
++}
++
++static ssize_t
++rts_megasas_tpg_store_nexus(struct se_portal_group *se_tpg,
++			    const char *page, size_t count)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++				struct rts_megasas_tpg, se_tpg);
++	unsigned char i_port[RTS_MEGASAS_NAMELEN], *ptr, *port_ptr;
++	int ret;
++	/*
++	 * Shutdown the active I_T nexus if 'NULL' is passed..
++	 */
++	if (!strncmp(page, "NULL", 4)) {
++		ret = rts_megasas_drop_nexus(tpg);
++		return (!ret) ? count : ret;
++	}
++	/*
++	 * Otherwise make sure the passed virtual Initiator port WWN matches
++	 * the fabric protocol_id set in tcm_vhost_make_tport(), and call
++	 * tcm_vhost_make_nexus().
++	 */
++	if (strlen(page) >= RTS_MEGASAS_NAMELEN) {
++		pr_err("Emulated NAA Sas Address: %s, exceeds"
++				" max: %d\n", page, RTS_MEGASAS_NAMELEN);
++		return -EINVAL;
++	}
++	snprintf(&i_port[0], RTS_MEGASAS_NAMELEN, "%s", page);
++
++	ptr = strstr(i_port, "naa.");
++	if (!ptr) {
++		pr_err("Passed Initiator Port %s is not a SAS\n", i_port);
++		return -EINVAL;
++	}
++	port_ptr = &i_port[0];
++	if (i_port[strlen(i_port)-1] == '\n')
++		i_port[strlen(i_port)-1] = '\0';
++
++	ret = rts_megasas_make_nexus(tpg, port_ptr);
++	if (ret < 0)
++		return ret;
++
++	return count;
++}
++
++TF_TPG_BASE_ATTR(rts_megasas, nexus, S_IRUGO | S_IWUSR);
++
++static struct configfs_attribute *rts_megasas_tpg_attrs[] = {
++	&rts_megasas_tpg_nexus.attr,
++	NULL,
++};
++
++struct se_portal_group *rts_megasas_make_naa_tpg(
++	struct se_wwn *wwn,
++	struct config_group *group,
++	const char *name)
++{
++	struct rts_megasas_tport *tport = container_of(wwn,
++			struct rts_megasas_tport, tport_wwn);
++	struct rts_megasas_tpg *tpg;
++	char *tpgt_str, *end_ptr;
++	int ret;
++	unsigned short int tpgt;
++
++	tpgt_str = strstr(name, "tpgt_");
++	if (!tpgt_str) {
++		pr_err("Unable to locate \"tpgt_#\" directory"
++				" group\n");
++		return ERR_PTR(-EINVAL);
++	}
++	tpgt_str += 5; /* Skip ahead of "tpgt_" */
++	tpgt = (unsigned short int) simple_strtoul(tpgt_str, &end_ptr, 0);
++
++	tpg = kzalloc(sizeof(struct rts_megasas_tpg), GFP_KERNEL);
++	if (!tpg)
++		return ERR_PTR(-ENOMEM);
++
++	mutex_init(&tpg->tpg_mutex);
++	INIT_LIST_HEAD(&tpg->tpg_list);
++	tpg->rtm_tpg_tport = tport;
++	tpg->tport_tpgt = tpgt;
++
++	/*
++	 * Register the tl_tpg as a emulated SAS TCM Target Endpoint
++	 */
++	ret = core_tpg_register(&rts_megasas_fabric_configfs->tf_ops, wwn,
++				&tpg->se_tpg, tpg, TRANSPORT_TPG_TYPE_NORMAL);
++	if (ret < 0) {
++		kfree(tpg);
++		return ERR_PTR(-ENOMEM);
++	}
++
++	pr_debug("RTS_Megasas_ConfigFS: Allocated Emulated SAS"
++		" Target Port %s,t,0x%04x\n",
++		 config_item_name(&wwn->wwn_group.cg_item), tpgt);
++	mutex_lock(&rts_megasas_mutex);
++	list_add_tail(&tpg->tpg_list, &rts_megasas_tpg_list);
++	mutex_unlock(&rts_megasas_mutex);
++	return &tpg->se_tpg;
++}
++
++void rts_megasas_drop_naa_tpg(struct se_portal_group *se_tpg)
++{
++	struct se_wwn *wwn = se_tpg->se_tpg_wwn;
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++				struct rts_megasas_tpg, se_tpg);
++	unsigned short tpgt;
++
++	tpgt = tpg->tport_tpgt;
++	mutex_lock(&rts_megasas_mutex);
++	list_del_init(&tpg->tpg_list);
++	mutex_unlock(&rts_megasas_mutex);
++
++	/*
++	 * Deregister the tl_tpg as a emulated SAS TCM Target Endpoint
++	 */
++	core_tpg_deregister(se_tpg);
++
++	tpg->rtm_tpg_tport = NULL;
++	tpg->tport_tpgt = -1;
++
++	pr_debug("RTS_Megasas_ConfigFS: Deallocated Emulated SAS"
++		" Target Port %s,t,0x%04x\n",
++		 config_item_name(&wwn->wwn_group.cg_item), tpgt);
++	kfree(tpg);
++}
++
++struct se_wwn *rts_megasas_make_tport(
++	struct target_fabric_configfs *tf,
++	struct config_group *group,
++	const char *name)
++{
++	struct rts_megasas_tport *tport;
++	u64 wwpn = 0;
++	char *ptr;
++	int ret;
++
++	if (rts_megasas_parse_wwn(name, &wwpn, 1) < 0) {
++		pr_err("Unable to parse tport wwpn '%s'", name);
++		return ERR_PTR(-EINVAL);
++	}
++	tport = kzalloc(sizeof(struct rts_megasas_tport), GFP_KERNEL);
++	if (!tport) {
++		pr_err("Unable to allocate struct rts_megasas_tport\n");
++		return ERR_PTR(-ENOMEM);
++	}
++	tport->tport_wwpn = wwpn;
++	ptr = strstr(name, "naa.");
++	if (!ptr) {
++		pr_err("Invalid prefix for emulated Target Port: %s", name);
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if (strlen(name) >= RTS_MEGASAS_NAMELEN + 4) {
++		pr_err("Emulated NAA SAS Address: %s, exceeds"
++			" max: %d\n", name, RTS_MEGASAS_NAMELEN);
++		ret = -EINVAL;
++		goto out;
++	}
++	snprintf(&tport->tport_name[0], RTS_MEGASAS_NAMELEN, "%s", name + 4);
++
++	pr_debug("Rts_Megasas_ConfigFS: Allocated emulated Target"
++		 " SAS Address: %s\n", tport->tport_name);
++
++	return &tport->tport_wwn;
++out:
++	kfree(tport);
++	return ERR_PTR(ret);
++}
++
++void rts_megasas_drop_tport(struct se_wwn *wwn)
++{
++	struct rts_megasas_tport *tport = container_of(wwn,
++				struct rts_megasas_tport, tport_wwn);
++
++	pr_debug("RTS_Megasas_ConfigFS: Deallocating emulated Target"
++		" SAS Address: %s\n", tport->tport_name);
++	kfree(tport);
++}
++
++int rts_megasas_set_endpoint(struct rts_megasas_hba *hba, int hba_id)
++{
++	struct rts_megasas_tpg *tpg;
++
++	pr_debug("Lookup up TPG %d\n", hba_id);
++	mutex_lock(&rts_megasas_mutex);
++	list_for_each_entry(tpg, &rts_megasas_tpg_list, tpg_list) {
++		if (tpg->tport_tpgt != hba_id)
++			continue;
++		mutex_lock(&tpg->tpg_mutex);
++		tpg->tpg_hba_count++;
++		hba->rtm_tpg = tpg;
++		mutex_unlock(&tpg->tpg_mutex);
++		mutex_unlock(&rts_megasas_mutex);
++		smp_mb__after_atomic_inc();
++		return 0;
++	}
++	mutex_unlock(&rts_megasas_mutex);
++	pr_debug("TPG %d not found\n", hba_id);
++	return -EINVAL;
++}
++
++int rts_megasas_clean_endpoint(struct rts_megasas_hba *hba)
++{
++	struct rts_megasas_tpg *tpg;
++
++	if (!hba->rtm_tpg)
++		return -ENODEV;
++
++	tpg = hba->rtm_tpg;
++	mutex_lock(&tpg->tpg_mutex);
++	tpg->tpg_hba_count--;
++	hba->rtm_tpg = NULL;
++	mutex_unlock(&tpg->tpg_mutex);
++
++	return 0;
++}
++
++static ssize_t rts_megasas_wwn_show_attr_version(
++	struct target_fabric_configfs *tf,
++	char *page)
++{
++	return sprintf(page, "RTS_MEGASAS fabric module %s\n",
++		       RTS_MEGASAS_VERSION);
++}
++
++TF_WWN_ATTR_RO(rts_megasas, version);
++
++static struct configfs_attribute *rts_megasas_wwn_attrs[] = {
++	&rts_megasas_wwn_version.attr,
++	NULL,
++};
++
++char *rts_megasas_get_fabric_name(void)
++{
++	return "megasas";
++}
++
++u8 rts_megasas_get_fabric_proto_ident(struct se_portal_group *se_tpg)
++{
++	return sas_get_fabric_proto_ident(se_tpg);
++}
++
++char *rts_megasas_get_fabric_wwn(struct se_portal_group *se_tpg)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++				struct rts_megasas_tpg, se_tpg);
++	struct rts_megasas_tport *tport = tpg->rtm_tpg_tport;
++
++	return &tport->tport_name[0];
++}
++
++u16 rts_megasas_get_tag(struct se_portal_group *se_tpg)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++				struct rts_megasas_tpg, se_tpg);
++	return tpg->tport_tpgt;
++}
++
++u32 rts_megasas_get_default_depth(struct se_portal_group *se_tpg)
++{
++	return 8;
++}
++
++u32 rts_megasas_get_pr_transport_id(
++	struct se_portal_group *se_tpg,
++	struct se_node_acl *se_nacl,
++	struct t10_pr_registration *pr_reg,
++	int *format_code,
++	unsigned char *buf)
++{
++	return sas_get_pr_transport_id(se_tpg, se_nacl, pr_reg,
++				       format_code, buf);
++}
++
++u32 rts_megasas_get_pr_transport_id_len(
++	struct se_portal_group *se_tpg,
++	struct se_node_acl *se_nacl,
++	struct t10_pr_registration *pr_reg,
++	int *format_code)
++{
++	return sas_get_pr_transport_id_len(se_tpg, se_nacl, pr_reg,
++					   format_code);
++}
++
++char *rts_megasas_parse_pr_out_transport_id(
++	struct se_portal_group *se_tpg,
++	const char *buf,
++	u32 *out_tid_len,
++	char **port_nexus_ptr)
++{
++	return sas_parse_pr_out_transport_id(se_tpg, buf, out_tid_len,
++					     port_nexus_ptr);
++}
++
++u32 rts_megasas_tpg_get_inst_index(struct se_portal_group *se_tpg)
++{
++	return 1;
++}
++
++
++int rts_megasas_check_true(struct se_portal_group *se_tpg)
++{
++	return 1;
++}
++
++int rts_megasas_check_false(struct se_portal_group *se_tpg)
++{
++	return 0;
++}
++
++void rts_megasas_release_cmd(struct se_cmd *se_cmd)
++{
++}
++
++extern void
++megasas_dequeue_frame(struct rts_megasas_hba *, struct rts_megasas_cmd *);
++
++/*
++ * Called from struct target_core_fabric_ops->check_stop_free()
++ */
++int rts_megasas_check_stop_free(struct se_cmd *se_cmd)
++{
++	struct rts_megasas_cmd *cmd = container_of(se_cmd,
++			struct rts_megasas_cmd, se_cmd);
++	/*
++	 * Do not release struct se_cmd's containing a valid TMR
++	 * pointer.  These will be released directly in rts_megasas_device_reset()
++	 * with transport_generic_free_cmd().
++	 */
++	if (se_cmd->se_cmd_flags & SCF_SCSI_TMR_CDB)
++		return 0;
++	/*
++	 * Release the struct se_cmd, which will make a callback to release
++	 * struct rts_megasas_cmd * in rts_megasas_deallocate_core_cmd()
++	 */
++	transport_generic_free_cmd(se_cmd, 0);
++
++	if (cmd->complete)
++		complete_all(cmd->complete);
++	else
++		megasas_dequeue_frame(cmd->rtm_hba, cmd);
++
++	return 1;
++}
++
++int rts_megasas_shutdown_session(struct se_session *se_sess)
++{
++	return 0;
++}
++
++void rts_megasas_close_session(struct se_session *se_sess)
++{
++	return;
++}
++
++u32 rts_megasas_sess_get_index(struct se_session *se_sess)
++{
++	return 0;
++}
++
++void rts_megasas_set_default_node_attrs(struct se_node_acl *nacl)
++{
++	return;
++}
++
++u32 rts_megasas_get_task_tag(struct se_cmd *se_cmd)
++{
++	struct rts_megasas_cmd *rtm_cmd = container_of(se_cmd,
++			struct rts_megasas_cmd, se_cmd);
++	return (u32)rtm_cmd->context;
++}
++
++int rts_megasas_write_pending(struct se_cmd *se_cmd)
++{
++	target_execute_cmd(se_cmd);
++	return 0;
++}
++
++int rts_megasas_write_pending_status(struct se_cmd *se_cmd)
++{
++	return 0;
++}
++
++static int
++rts_megasas_port_link(struct se_portal_group *se_tpg, struct se_lun *lun)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++		struct rts_megasas_tpg, se_tpg);
++
++	pr_debug("Add LUN %d to TPG %d\n", lun->unpacked_lun, tpg->tport_tpgt);
++	mutex_lock(&tpg->tpg_mutex);
++	tpg->tpg_port_count++;
++	mutex_unlock(&tpg->tpg_mutex);
++
++	return 0;
++}
++
++static void
++rts_megasas_port_unlink(struct se_portal_group *se_tpg, struct se_lun *se_lun)
++{
++	struct rts_megasas_tpg *tpg = container_of(se_tpg,
++		struct rts_megasas_tpg, se_tpg);
++
++	mutex_lock(&tpg->tpg_mutex);
++	tpg->tpg_port_count--;
++	mutex_unlock(&tpg->tpg_mutex);
++}
++
++static struct target_core_fabric_ops rts_megasas_ops = {
++	.get_fabric_name		= rts_megasas_get_fabric_name,
++	.get_fabric_proto_ident		= rts_megasas_get_fabric_proto_ident,
++	.tpg_get_wwn			= rts_megasas_get_fabric_wwn,
++	.tpg_get_tag			= rts_megasas_get_tag,
++	.tpg_get_default_depth		= rts_megasas_get_default_depth,
++	.tpg_get_pr_transport_id	= rts_megasas_get_pr_transport_id,
++	.tpg_get_pr_transport_id_len	= rts_megasas_get_pr_transport_id_len,
++	.tpg_parse_pr_out_transport_id	= rts_megasas_parse_pr_out_transport_id,
++	.tpg_check_demo_mode		= rts_megasas_check_true,
++	.tpg_check_demo_mode_cache	= rts_megasas_check_true,
++	.tpg_check_demo_mode_write_protect = rts_megasas_check_false,
++	.tpg_check_prod_mode_write_protect = rts_megasas_check_false,
++	.tpg_alloc_fabric_acl		= rts_megasas_alloc_fabric_acl,
++	.tpg_release_fabric_acl		= rts_megasas_release_fabric_acl,
++	.tpg_get_inst_index		= rts_megasas_tpg_get_inst_index,
++	.check_stop_free		= rts_megasas_check_stop_free,
++	.release_cmd			= rts_megasas_release_cmd,
++	.shutdown_session		= rts_megasas_shutdown_session,
++	.close_session			= rts_megasas_close_session,
++	.sess_get_index			= rts_megasas_sess_get_index,
++	.sess_get_initiator_sid		= NULL,
++	.write_pending			= rts_megasas_write_pending,
++	.write_pending_status		= rts_megasas_write_pending_status,
++	.set_default_node_attributes	= rts_megasas_set_default_node_attrs,
++	.get_task_tag			= rts_megasas_get_task_tag,
++	.get_cmd_state			= rts_megasas_get_cmd_state,
++	.queue_data_in			= rts_megasas_queue_data_in,
++	.queue_status			= rts_megasas_queue_status,
++	.queue_tm_rsp			= rts_megasas_queue_tm_rsp,
++	/*
++	 * Setup function pointers for generic logic in target_core_fabric_configfs.c
++	 */
++	.fabric_make_wwn		= rts_megasas_make_tport,
++	.fabric_drop_wwn		= rts_megasas_drop_tport,
++	.fabric_make_tpg		= rts_megasas_make_naa_tpg,
++	.fabric_drop_tpg		= rts_megasas_drop_naa_tpg,
++	.fabric_post_link		= rts_megasas_port_link,
++	.fabric_pre_unlink		= rts_megasas_port_unlink,
++	.fabric_make_np			= NULL,
++	.fabric_drop_np			= NULL,
++	.fabric_make_nodeacl		= rts_megasas_make_nodeacl,
++	.fabric_drop_nodeacl		= rts_megasas_drop_nodeacl,
++};
++
++int rts_megasas_register_configfs(void)
++{
++	struct target_fabric_configfs *fabric;
++	int ret;
++
++	printk(KERN_INFO "RTS_MEGASAS fabric module %s on %s/%s"
++		" on "UTS_RELEASE"\n",RTS_MEGASAS_VERSION, utsname()->sysname,
++		utsname()->machine);
++	/*
++	 * Register the top level struct config_item_type with TCM core
++	 */
++	fabric = target_fabric_configfs_init(THIS_MODULE, "megasas");
++	if (IS_ERR(fabric)) {
++		printk(KERN_ERR "target_fabric_configfs_init() failed\n");
++		return PTR_ERR(fabric);
++	}
++	/*
++	 * Setup fabric->tf_ops from our local rts_megasas_ops
++	 */
++	fabric->tf_ops = rts_megasas_ops;
++	/*
++	 * Setup default attribute lists for various fabric->tf_cit_tmpl
++	 */
++	TF_CIT_TMPL(fabric)->tfc_wwn_cit.ct_attrs = rts_megasas_wwn_attrs;
++	TF_CIT_TMPL(fabric)->tfc_tpg_base_cit.ct_attrs = rts_megasas_tpg_attrs;
++	TF_CIT_TMPL(fabric)->tfc_tpg_attrib_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_param_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_np_base_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_base_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_attrib_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_auth_cit.ct_attrs = NULL;
++	TF_CIT_TMPL(fabric)->tfc_tpg_nacl_param_cit.ct_attrs = NULL;
++	/*
++	 * Register the fabric for use within TCM
++	 */
++	ret = target_fabric_configfs_register(fabric);
++	if (ret < 0) {
++		printk(KERN_ERR "target_fabric_configfs_register() failed"
++				" for RTS_MEGASAS\n");
++		return ret;
++	}
++	/*
++	 * Setup our local pointer to *fabric
++	 */
++	rts_megasas_fabric_configfs = fabric;
++	printk(KERN_INFO "RTS_MEGASAS[0] - Set fabric -> rts_megasas_fabric_configfs\n");
++	return 0;
++};
++
++void __exit rts_megasas_deregister_configfs(void)
++{
++	if (!rts_megasas_fabric_configfs)
++		return;
++
++	target_fabric_configfs_deregister(rts_megasas_fabric_configfs);
++	rts_megasas_fabric_configfs = NULL;
++	printk(KERN_INFO "RTS_MEGASAS[0] - Cleared rts_megasas_fabric_configfs\n");
++};
++
+diff --git a/drivers/target/rts_megasas/rts_megasas_mfi.c b/drivers/target/rts_megasas/rts_megasas_mfi.c
+new file mode 100644
+index 0000000..ee8df92
+--- /dev/null
++++ b/drivers/target/rts_megasas/rts_megasas_mfi.c
+@@ -0,0 +1,2701 @@
++/*
++ * In-kernel MFI-SAS protocol emulation
++ *
++ * Copyright (c) 2012 RisingTide Systems LLC.
++ *
++ */
++
++#undef DEBUG
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/version.h>
++#include <generated/utsrelease.h>
++#include <linux/utsname.h>
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/kthread.h>
++#include <linux/types.h>
++#include <linux/string.h>
++#include <linux/configfs.h>
++#include <linux/ctype.h>
++#include <linux/pci_ids.h>
++#include <linux/time.h>
++#include <linux/rtc.h>
++#include <linux/eventfd.h>
++#include <linux/vhost.h>
++#include <linux/mempool.h>
++#include <linux/miscdevice.h>
++
++#include <target/target_core_base.h>
++#include <target/target_core_fabric.h>
++#include <target/target_core_fabric_configfs.h>
++#include <target/target_core_configfs.h>
++#include <target/target_core_backend.h>
++#include <target/configfs_macros.h>
++
++#include <scsi/scsi.h>
++
++#include "mfi.h"
++#include "rts_megasas.h"
++
++#define MEGASAS_VERSION "3.06"
++
++#define MEGASAS_HBA_SERIAL "RTS0123456"
++#define NAA_LOCALLY_ASSIGNED_ID 0x3ULL
++#define IEEE_COMPANY_LOCALLY_ASSIGNED 0x525400
++
++#define MEGASAS_FLAG_USE_JBOD      0
++#define MEGASAS_MASK_USE_JBOD      (1 << MEGASAS_FLAG_USE_JBOD)
++#define MEGASAS_FLAG_USE_QUEUE64   2
++#define MEGASAS_MASK_USE_QUEUE64   (1 << MEGASAS_FLAG_USE_QUEUE64)
++
++static struct kmem_cache *megasas_frame_cache;
++static mempool_t *megasas_frame_pool;
++/*
++ * MFI protocol emulation
++ */
++static const char *mfi_frame_desc[] = {
++    "MFI init", "LD Read", "LD Write", "LD SCSI", "PD SCSI",
++    "MFI Cmd", "MFI Abort", "MFI SMP", "MFI Stop"};
++
++static bool megasas_use_queue64(u32 flags)
++{
++	return flags & MEGASAS_MASK_USE_QUEUE64;
++}
++
++static bool megasas_is_jbod(u32 flags)
++{
++	return flags & MEGASAS_MASK_USE_JBOD;
++}
++
++static void megasas_frame_set_cmd_status(u8 __user *frame, uint8_t v)
++{
++	put_user(v, frame + offsetof(struct mfi_frame_header, cmd_status));
++}
++
++static void megasas_frame_set_scsi_status(u8 __user *frame, uint8_t v)
++{
++	put_user(v, frame + offsetof(struct mfi_frame_header, scsi_status));
++}
++
++static u32 megasas_get_reply_queue_head(struct rts_megasas_hba *hba)
++{
++	int ret;
++	struct page *page;
++	void *producer_ptr;
++	uintptr_t offset;
++	u32 head, *producer;
++
++	ret = get_user_pages(current, hba->mm,
++			     (unsigned long)hba->producer_pa, 1,
++			     false, 0, &page, NULL);
++	if (unlikely(ret != 1))
++		return (u32)~0;
++
++	producer_ptr = kmap_atomic(page);
++	if (unlikely(!producer_ptr)) {
++		put_page(page);
++		return (u32)~0;
++	}
++
++	offset = (uintptr_t)hba->producer_pa & ~PAGE_MASK;
++	producer = (u32 *)((u8 *)producer_ptr + offset);
++	head = *producer;
++	kunmap_atomic(producer_ptr);
++	put_page(page);
++
++	return head;
++}
++
++static int megasas_set_reply_queue_head(struct rts_megasas_hba *hba, u32 head)
++{
++	int ret;
++	struct page *page;
++	void *producer_ptr;
++	uintptr_t offset;
++	u32 *producer;
++
++	if (!hba->producer_pa)
++		return -EAGAIN;
++
++	ret = get_user_pages(current, hba->mm,
++			     (unsigned long)hba->producer_pa, 1,
++			     true, 0, &page, NULL);
++	if (unlikely(ret != 1)) {
++		pr_warn("cannot get producer page\n");
++		return -EINVAL;
++	}
++
++	producer_ptr = kmap_atomic(page);
++	if (unlikely(!producer_ptr)) {
++		put_page(page);
++		pr_warn("cannot map producer page\n");
++		return -EFAULT;
++	}
++	offset = (uintptr_t)hba->producer_pa & ~PAGE_MASK;
++	producer = (u32 *)((u8 *)producer_ptr + offset);
++	*producer = head;
++	kunmap_atomic(producer_ptr);
++	put_page(page);
++
++	return 0;
++}
++
++static u32 megasas_get_reply_queue_tail(struct rts_megasas_hba *hba)
++{
++	int ret;
++	struct page *page;
++	void *consumer_ptr;
++	uintptr_t offset;
++	u32 tail, *consumer;
++
++	ret = get_user_pages(current, hba->mm,
++			     (unsigned long)hba->consumer_pa, 1,
++			     false, 0, &page, NULL);
++	if (unlikely(ret != 1))
++		return (u32)~0;
++
++	consumer_ptr = kmap_atomic(page);
++	if (unlikely(!consumer_ptr)) {
++		put_page(page);
++		return (u32)~0;
++	}
++	offset = (uintptr_t)hba->consumer_pa & ~PAGE_MASK;
++	consumer = (u32 *)((u8 *)consumer_ptr + offset);
++	tail = *consumer;
++	kunmap_atomic(consumer_ptr);
++	put_page(page);
++
++	return tail;
++}
++
++/*
++ * Context is considered opaque, but the HBA firmware is running
++ * in little endian mode. So convert it to little endian, too.
++ */
++static u64 megasas_frame_get_context(u8 __user *frame)
++{
++	u64 context;
++	off_t context_offset = offsetof(struct mfi_frame_header, context);
++	int ret;
++
++	ret = copy_from_user(&context, frame + context_offset, sizeof(u64));
++	if (unlikely(ret)) {
++		pr_warn("Unable to get context from frame %p, ret %d\n",
++			frame, ret);
++		context = (u64)-1;
++	}
++	return context;
++}
++
++static u8 megasas_get_cmd_status(struct rts_megasas_cmd *cmd)
++{
++	u8 status;
++
++	if (!cmd->frame) {
++		pr_debug("cmd %llx: frame not mapped\n",
++			 cmd->context);
++		status = MFI_STAT_INVALID_PARAMETER;
++	} else
++		status = cmd->frame->header.cmd_status;
++
++	return status;
++}
++
++static void megasas_set_cmd_status(struct rts_megasas_cmd *cmd, uint8_t status)
++{
++	if (cmd->frame) {
++		cmd->frame->header.cmd_status = status;
++	} else if (cmd->pa) {
++		pr_warn("cmd %llx: frame not mapped\n",
++			 cmd->context);
++		megasas_frame_set_cmd_status(cmd->pa, status);
++	} else {
++		pr_debug("cmd %llx: no frame address\n",
++			 cmd->context);
++	}
++}
++
++static void megasas_set_scsi_status(struct rts_megasas_cmd *cmd,
++				    uint8_t status)
++{
++	if (cmd->frame) {
++		cmd->frame->header.scsi_status = status;
++	} else if (cmd->pa) {
++		pr_warn("cmd %llx: frame not mapped\n",
++			 cmd->context);
++		megasas_frame_set_scsi_status(cmd->pa, status);
++	} else {
++		pr_debug("cmd %llx: no frame address\n",
++			 cmd->context);
++	}
++}
++
++static bool megasas_frame_is_ieee_sgl(struct rts_megasas_cmd *cmd)
++{
++	return cmd->flags & MFI_FRAME_IEEE_SGL;
++}
++
++static bool megasas_frame_is_sgl64(struct rts_megasas_cmd *cmd)
++{
++	return cmd->flags & MFI_FRAME_SGL64;
++}
++
++static bool megasas_frame_is_sense64(struct rts_megasas_cmd *cmd)
++{
++	return cmd->flags & MFI_FRAME_SENSE64;
++}
++
++static bool megasas_frame_is_polled(struct rts_megasas_cmd *cmd)
++{
++	return cmd->flags & MFI_FRAME_DONT_POST_IN_REPLY_QUEUE;
++}
++
++static size_t _count_pages(uintptr_t addr, size_t len)
++{
++	size_t pg_count;
++
++	pg_count = (addr + len + PAGE_SIZE -1) >> PAGE_SHIFT;
++	pg_count -= (addr >> PAGE_SHIFT);
++
++	return pg_count;
++}
++
++static bool check_region_boundary(const struct vhost_memory_region *reg,
++				  uint64_t addr, size_t len)
++{
++	unsigned long max_size;
++
++	max_size = reg->memory_size - addr + reg->guest_phys_addr;
++	return (max_size < len);
++}
++
++static void __user * map_to_region(const struct vhost_memory_region *reg,
++				   uint64_t addr)
++{
++	return (void __user *)(unsigned long)
++		(reg->userspace_addr + addr - reg->guest_phys_addr);
++}
++
++static void __user * map_guest_to_host(struct rts_megasas_hba *hba,
++				       uint64_t addr, int size)
++{
++	const struct vhost_memory_region *reg = NULL;
++
++	reg = find_region(hba, addr, size);
++	if (unlikely(!reg))
++		return ERR_PTR(-EPERM);
++
++	if (unlikely(check_region_boundary(reg, addr, size)))
++		return ERR_PTR(-EFAULT);
++
++	return map_to_region(reg, addr);
++}
++
++static u64
++megasas_sgl_get_addr(struct rts_megasas_cmd *cmd, union mfi_sgl *sgl)
++{
++	u64 addr;
++
++	if (megasas_frame_is_ieee_sgl(cmd)) {
++		addr = le64_to_cpu(sgl->sg_skinny->addr);
++	} else if (megasas_frame_is_sgl64(cmd)) {
++		addr = le64_to_cpu(sgl->sg64->addr);
++	} else {
++		addr = le32_to_cpu(sgl->sg32->addr);
++	}
++	return addr;
++}
++
++static u32
++megasas_sgl_get_len(struct rts_megasas_cmd *cmd, union mfi_sgl *sgl)
++{
++	u32 len;
++
++	if (megasas_frame_is_ieee_sgl(cmd)) {
++		len = le32_to_cpu(sgl->sg_skinny->len);
++	} else if (megasas_frame_is_sgl64(cmd)) {
++		len = le32_to_cpu(sgl->sg64->len);
++	} else {
++		len = le32_to_cpu(sgl->sg32->len);
++	}
++	return len;
++}
++
++static union mfi_sgl *
++megasas_sgl_next(struct rts_megasas_cmd *cmd, union mfi_sgl *sgl)
++{
++	u8 *next = (u8 *)sgl;
++
++	if (megasas_frame_is_ieee_sgl(cmd)) {
++		next += sizeof(struct mfi_sg_skinny);
++	} else if (megasas_frame_is_sgl64(cmd)) {
++		next += sizeof(struct mfi_sg64);
++	} else {
++		next += sizeof(struct mfi_sg32);
++	}
++
++	if (next >= (u8 *)cmd->frame + cmd->pa_size)
++		return NULL;
++
++	return (union mfi_sgl *)next;
++}
++
++static void megasas_unmap_sgl(struct rts_megasas_cmd *cmd)
++{
++	int i;
++
++	if (!cmd || !cmd->sgl)
++		return;
++	for (i = 0; i < cmd->sgl_count; i++)
++		put_page(sg_page(&cmd->sgl[i]));
++	kfree(cmd->sgl);
++	cmd->sgl = NULL;
++	cmd->sgl_count = 0;
++	cmd->sgl_size = 0;
++}
++
++static int megasas_map_sgl(struct rts_megasas_hba *hba,
++			   struct rts_megasas_cmd *cmd)
++{
++	int i;
++	uintptr_t sgl_count = 0;
++	size_t sgl_size = 0;
++	bool is_write;
++	struct scatterlist *sgl = NULL;
++	union mfi_sgl *sge, *sge_p;
++	u64 sge_addr;
++	void __user *_sge_addr;
++	u32 sge_size;
++
++	if (cmd->frame->header.frame_cmd == MFI_CMD_ABORT ||
++	    cmd->frame->header.frame_cmd == MFI_CMD_INIT)
++		return 0;
++
++	switch (cmd->frame->header.frame_cmd) {
++	case MFI_CMD_LD_WRITE:
++		is_write = true;
++		sge = &cmd->frame->io.sgl;
++		break;
++	case MFI_CMD_LD_READ:
++		is_write = false;
++		sge = &cmd->frame->io.sgl;
++		break;
++	case MFI_CMD_DCMD:
++		is_write = cmd->flags & MFI_FRAME_DIR_WRITE ? true : false;
++		sge = &cmd->frame->dcmd.sgl;
++		break;
++	default:
++		is_write = cmd->flags & MFI_FRAME_DIR_WRITE ? true : false;
++		sge = &cmd->frame->pass.sgl;
++		break;
++	}
++
++	cmd->flags = le16_to_cpu(cmd->frame->header.flags);
++
++	sgl_count = 0;
++	sge_p = sge;
++	for (i = 0; i < cmd->frame->header.sge_count; i++) {
++		if (!sge_p) {
++			pr_warn("cmd %llx: sge underflow %d/%d count %lu\n",
++				cmd->context, i,
++				cmd->frame->header.sge_count, sgl_count);
++			return -EINVAL;
++		}
++		sge_addr = megasas_sgl_get_addr(cmd, sge_p);
++		sge_size = megasas_sgl_get_len(cmd, sge_p);
++		if (!sge_addr || !sge_size) {
++			pr_warn("cmd %llx: invalid sge %d addr %p len %d",
++				 cmd->context, i, (void *)sge_addr, sge_size);
++			return -EINVAL;
++		}
++		sgl_count += _count_pages(sge_addr, sge_size);
++		sge_p = megasas_sgl_next(cmd, sge_p);
++	}
++	if (sgl_count) {
++		sgl = kzalloc(sizeof(cmd->sgl[0]) * sgl_count, GFP_ATOMIC);
++		if (!sgl)
++			return -ENOMEM;
++		sg_init_table(sgl, sgl_count);
++	}
++	cmd->sgl = sgl;
++	if (sgl_count > 1)
++		pr_debug("cmd %llx: Mapping %u iovecs for %lu pages\n",
++			 cmd->context, cmd->frame->header.sge_count, sgl_count);
++	if (!sgl_count)
++		return 0;
++
++	cmd->sgl_count = 0;
++	for (i = 0; i < cmd->frame->header.sge_count; i++) {
++		int ret;
++
++		if (!sge) {
++			pr_debug("cmd %llx: SG underflow %d count %d\n",
++				 cmd->context, i, cmd->frame->header.sge_count);
++			goto unmap;
++		}
++		sge_addr = megasas_sgl_get_addr(cmd, sge);
++		sge_size = megasas_sgl_get_len(cmd, sge);
++		if (!sge_addr || !sge_size) {
++			pr_debug("cmd %llx: invalid sge %d addr %p len %d",
++				 cmd->context, i, (void *)sge_addr, sge_size);
++			goto unmap;
++		}
++		_sge_addr = map_guest_to_host(hba, sge_addr, sge_size);
++		if (unlikely(!_sge_addr)) {
++			pr_warn("cmd %llx: cannot map sge %d addr %p, error %ld\n",
++				cmd->context, i, (void *)sge_addr,
++				PTR_ERR(_sge_addr));
++			goto unmap;
++		}
++		while (sge_size > 0) {
++			struct page *page;
++			uintptr_t sge_offset;
++			int sge_bytes;
++
++			ret = get_user_pages(current, hba->mm,
++					     (unsigned long)_sge_addr, 1,
++					     is_write, 0, &page, NULL);
++			BUG_ON(ret == 0); /* we should either get our page or fail */
++			if (ret < 0) {
++				pr_debug("cmd %llx: failed to map sge %d "
++					 "addr %p len %d\n",
++					 cmd->context, i, _sge_addr, sge_size);
++				goto unmap;
++			}
++			sge_offset = (uintptr_t)_sge_addr & ~PAGE_MASK;
++			sge_bytes = min_t(unsigned int, PAGE_SIZE - sge_offset,
++					  sge_size);
++			sg_set_page(sgl, page, sge_bytes, sge_offset);
++			sge_size -= sge_bytes;
++			_sge_addr += sge_bytes;
++			sgl_size += sge_bytes;
++			cmd->sgl_count++;
++			sgl++;
++		}
++
++		sge = megasas_sgl_next(cmd, sge);
++	}
++
++	cmd->sgl_size = sgl_size;
++	return 0;
++unmap:
++	megasas_unmap_sgl(cmd);
++	return cmd->frame->header.sge_count - i;
++}
++
++/*
++ * passthrough sense and io sense are at the same offset
++ */
++static void megasas_copy_sense(struct rts_megasas_hba *hba,
++			       struct rts_megasas_cmd *cmd)
++{
++	u32 pa_hi = 0, pa_lo;
++	u64 pa;
++	struct page *sense_page;
++	void __user *sense_pa;
++	void *sense_ptr;
++	int sense_len = cmd->frame->header.sense_len;
++	int sense_offset, ret;
++
++	if (!cmd->frame->header.sense_len)
++		return;
++
++	pa_lo = le32_to_cpu(cmd->frame->pass.sense_addr_lo);
++	if (megasas_frame_is_sense64(cmd)) {
++		pa_hi = le32_to_cpu(cmd->frame->pass.sense_addr_hi);
++	}
++	pa = ((u64) pa_hi << 32) | pa_lo;
++	sense_pa = map_guest_to_host(hba, pa, cmd->frame->header.sense_len);
++	down_read(&hba->mm->mmap_sem);
++	ret = get_user_pages(current, hba->mm, (unsigned long)sense_pa, 1,
++			     true, 0, &sense_page, NULL);
++	up_read(&hba->mm->mmap_sem);
++	if (ret != 1) {
++		pr_warn("cmd %llx: failed to map sense\n", cmd->context);
++		return;
++	}
++	sense_ptr = kmap_atomic(sense_page);
++	if (sense_len > SCSI_SENSE_BUFFERSIZE)
++		sense_len = SCSI_SENSE_BUFFERSIZE;
++	sense_offset = (uintptr_t)sense_ptr & ~PAGE_MASK;
++	memcpy(sense_ptr + sense_offset, cmd->sense_buf, sense_len);
++	kunmap_atomic(sense_ptr);
++	put_page(sense_page);
++
++	return;
++}
++
++/*
++ * Encode lba and len into a READ_16/WRITE_16 CDB
++ */
++static void megasas_encode_lba(uint8_t *cdb, uint64_t lba,
++			       uint32_t len, bool is_write)
++{
++	memset(cdb, 0x0, 16);
++	if (is_write) {
++		cdb[0] = WRITE_16;
++	} else {
++		cdb[0] = READ_16;
++	}
++	cdb[2] = (lba >> 56) & 0xff;
++	cdb[3] = (lba >> 48) & 0xff;
++	cdb[4] = (lba >> 40) & 0xff;
++	cdb[5] = (lba >> 32) & 0xff;
++	cdb[6] = (lba >> 24) & 0xff;
++	cdb[7] = (lba >> 16) & 0xff;
++	cdb[8] = (lba >> 8) & 0xff;
++	cdb[9] = (lba) & 0xff;
++	cdb[10] = (len >> 24) & 0xff;
++	cdb[11] = (len >> 16) & 0xff;
++	cdb[12] = (len >> 8) & 0xff;
++	cdb[13] = (len) & 0xff;
++}
++
++/*
++ * Utility functions
++ */
++static uint64_t megasas_fw_time(void)
++{
++	struct timespec ts = current_kernel_time();
++	struct rtc_time curtime;
++	uint64_t bcd_time;
++
++	rtc_time_to_tm(ts.tv_sec, &curtime);
++	bcd_time = ((uint64_t)curtime.tm_sec & 0xff) << 48 |
++		((uint64_t)curtime.tm_min & 0xff)  << 40 |
++		((uint64_t)curtime.tm_hour & 0xff) << 32 |
++		((uint64_t)curtime.tm_mday & 0xff) << 24 |
++		((uint64_t)curtime.tm_mon & 0xff)  << 16 |
++		((uint64_t)(curtime.tm_year + 1900) & 0xffff);
++
++	return bcd_time;
++}
++
++/*
++ * Default disk sata address
++ * 0x1221 is the magic number as
++ * present in real hardware,
++ * so use it here, too.
++ */
++static uint64_t megasas_get_sata_addr(uint16_t id)
++{
++	uint64_t addr = (0x1221ULL << 48);
++	return addr & (id << 24);
++}
++
++/*
++ * Frame handling
++ */
++static int megasas_next_index(int index, int limit)
++{
++	index++;
++	if (index == limit) {
++		index = 0;
++	}
++	return index;
++}
++
++static struct rts_megasas_cmd *
++megasas_lookup_frame(struct rts_megasas_hba *hba, void __user *frame)
++{
++	struct rts_megasas_cmd *cmd = NULL, *tmp_cmd;
++
++	mutex_lock(&hba->frame_lock);
++	list_for_each_entry(tmp_cmd, &hba->frame_list, list) {
++		if (tmp_cmd->pa && tmp_cmd->pa == frame) {
++			cmd = tmp_cmd;
++			break;
++		}
++	}
++	mutex_unlock(&hba->frame_lock);
++	return cmd;
++}
++
++static struct rts_megasas_cmd *
++megasas_next_frame(struct rts_megasas_hba *hba, void __user *frame,
++		   uint64_t context)
++{
++	struct rts_megasas_cmd *cmd = NULL;
++
++	cmd = megasas_lookup_frame(hba, frame);
++	if (cmd) {
++		pr_warn("cmd %llx: frame busy\n", context);
++		return NULL;
++	}
++	cmd = mempool_alloc(megasas_frame_pool, GFP_ATOMIC);
++	if (!cmd) {
++		pr_warn("cmd %llx: all frames mapped\n", context);
++	} else {
++		memset(cmd, 0x0, sizeof(struct rts_megasas_cmd));
++		cmd->context = context;
++		cmd->pa = frame;
++		mutex_lock(&hba->frame_lock);
++		list_add(&cmd->list, &hba->frame_list);
++		mutex_unlock(&hba->frame_lock);
++	}
++	return cmd;
++}
++
++static void
++megasas_unmap_frame(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	if (cmd->frame_ptr)
++		vunmap(cmd->frame_ptr);
++	cmd->frame = NULL;
++	cmd->pa = NULL;
++	cmd->pa_size = 0;
++	if (cmd->frame_page[0])
++		put_page(cmd->frame_page[0]);
++	if (cmd->frame_page[1])
++		put_page(cmd->frame_page[1]);
++}
++static int
++megasas_map_frame(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	int ret;
++	loff_t frame_offset;
++
++	if (cmd->frame) {
++		pr_warn("cmd %llx: frame already mapped\n", cmd->context);
++		return -EAGAIN;
++	}
++
++	/* frame is assumed to be host-user relative */
++	ret = get_user_pages_fast((unsigned long)cmd->pa, 2,
++				  true, cmd->frame_page);
++	if (unlikely(ret <= 0)) {
++		pr_err("cmd %llx: cannot get page for frame %p\n",
++		       cmd->context, cmd->pa);
++		return -EFAULT;
++	}
++	if (ret == 1)
++		cmd->frame_page[1] = NULL;
++
++	cmd->frame_ptr = vmap(cmd->frame_page, ret,
++			      VM_USERMAP, PAGE_KERNEL);
++	if (!cmd->frame_ptr) {
++		pr_err("cmd %llx: cannot map frame %p count %d\n",
++		       cmd->context, cmd->pa, ret);
++		megasas_unmap_frame(hba, cmd);
++		return -EACCES;
++	}
++	frame_offset = (unsigned long)cmd->pa & ~PAGE_MASK;
++	cmd->frame = cmd->frame_ptr + frame_offset;
++	cmd->pa_size = (PAGE_SIZE * ret) - frame_offset;
++	if (cmd->pa_size < MFI_FRAME_SIZE) {
++		pr_debug("cmd %llx: frame beyond page boundary, "
++			 "size %d\n", cmd->context, cmd->pa_size);
++		megasas_unmap_frame(hba, cmd);
++		return -EINVAL;
++	}
++	return 0;
++}
++
++static struct rts_megasas_cmd *
++megasas_enqueue_frame(struct rts_megasas_hba *hba, void __user *frame,
++		      uint64_t context, u8 frame_count)
++{
++	struct rts_megasas_cmd *cmd = NULL;
++	int ret = 0;
++
++	if (!megasas_use_queue64(hba->flags)) {
++		context &= (uint64_t)0xFFFFFFFF;
++	}
++	cmd = megasas_next_frame(hba, frame, context);
++	/* All frames busy */
++	if (!cmd) {
++		return ERR_PTR(-EBUSY);
++	}
++
++	ret = megasas_map_frame(hba, cmd);
++	if (ret) {
++		mutex_lock(&hba->frame_lock);
++		list_del_init(&cmd->list);
++		mutex_unlock(&hba->frame_lock);
++		mempool_free(cmd, megasas_frame_pool);
++		return ERR_PTR(ret);
++	}
++	return cmd;
++}
++
++static void
++megasas_complete_frame(struct rts_megasas_hba *hba, u64 context, u8 status)
++{
++	int head, tail, queue_offset, ret;
++	void *queue_ptr;
++
++	spin_lock_irq(&hba->reply_queue_lock);
++	tail = hba->reply_queue_head;
++	hba->reply_queue_head = head = megasas_next_index(tail, hba->fw_cmds);
++	spin_unlock_irq(&hba->reply_queue_lock);
++
++	if (hba->reply_queue) {
++		/* Update reply queue */
++		if (megasas_use_queue64(hba->flags))
++			queue_offset = tail * sizeof(uint64_t);
++		else
++			queue_offset = tail * sizeof(uint32_t);
++
++		queue_ptr = hba->reply_queue;
++		if (megasas_use_queue64(hba->flags)) {
++			uint64_t *queue_val;
++
++			queue_val = queue_ptr + queue_offset;
++			*queue_val = context;
++		} else {
++			uint32_t *queue_val;
++
++			queue_val = queue_ptr + queue_offset;
++			*queue_val = (uint32_t)context;
++		}
++	}
++
++	ret = megasas_set_reply_queue_head(hba, head);
++	if (unlikely(ret)) {
++		pr_warn("cannot update reply queue head\n");
++		return;
++	}
++
++	/* Signal userspace */
++	if (hba->doorbell_ctx)
++		eventfd_signal(hba->doorbell_ctx, 1);
++
++	if (hba->irqfd_ctx) {
++		eventfd_signal(hba->irqfd_ctx, 1);
++	}
++}
++
++static void
++megasas_finish_aen(struct rts_megasas_hba *hba)
++{
++	struct rts_megasas_cmd *aen_cmd = hba->event_cmd;
++
++	hba->event_cmd = NULL;
++	if (!aen_cmd)
++		return;
++	megasas_unmap_sgl(aen_cmd);
++	megasas_set_cmd_status(aen_cmd, MFI_STAT_OK);
++	megasas_complete_frame(hba, aen_cmd->context, MFI_STAT_OK);
++	megasas_unmap_frame(hba, aen_cmd);
++	mempool_free(aen_cmd, megasas_frame_pool);
++}
++
++void
++megasas_dequeue_frame(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	mutex_lock(&hba->frame_lock);
++	if (list_empty(&cmd->list)) {
++		pr_debug("cmd %llx: frame already dequeued\n", cmd->context);
++		mutex_unlock(&hba->frame_lock);
++		return;
++	}
++	list_del_init(&cmd->list);
++	mutex_unlock(&hba->frame_lock);
++	megasas_unmap_sgl(cmd);
++	if (!megasas_frame_is_polled(cmd))
++		megasas_complete_frame(hba, cmd->context,
++				       cmd->frame->header.cmd_status);
++	megasas_unmap_frame(hba, cmd);
++	mempool_free(cmd, megasas_frame_pool);
++}
++
++/* Horribly inefficient ... */
++void megasas_reset_frames(struct rts_megasas_hba *hba)
++{
++	struct rts_megasas_cmd *cmd, *tmp_cmd;
++
++	mutex_lock(&hba->frame_lock);
++	list_for_each_entry_safe(cmd, tmp_cmd, &hba->frame_list, list) {
++		mutex_unlock(&hba->frame_lock);
++		if (cmd->sgl) {
++			pr_warn("cmd %llx: aborting task\n", cmd->context);
++			rts_megasas_task_reset(hba, cmd);
++		}
++		megasas_dequeue_frame(hba, cmd);
++		mutex_lock(&hba->frame_lock);
++	}
++	mutex_unlock(&hba->frame_lock);
++}
++
++int megasas_map_reply_queue(struct rts_megasas_hba *hba,
++			    unsigned long pa, int page_count)
++{
++	int ret, i;
++	loff_t reply_queue_offset;
++
++	hba->reply_queue_pages = kmalloc(sizeof(struct page *) * page_count,
++					 GFP_KERNEL);
++	if (!hba->reply_queue_pages)
++		return -ENOMEM;
++
++	ret = get_user_pages(current, hba->mm, pa, page_count, true,
++			     0, hba->reply_queue_pages, NULL);
++	if (unlikely(ret <= 0)) {
++		kfree(hba->reply_queue_pages);
++		hba->reply_queue_pages = NULL;
++		return -EFAULT;
++	}
++	hba->reply_queue_ptr = vmap(hba->reply_queue_pages, ret,
++				    VM_USERMAP, PAGE_KERNEL);
++	if (!hba->reply_queue_ptr) {
++		for (i = 0; i < ret; i++)
++			put_page(hba->reply_queue_pages[i]);
++		kfree(hba->reply_queue_pages);
++		hba->reply_queue_pages = NULL;
++		return -EACCES;
++	}
++	reply_queue_offset = pa & ~PAGE_MASK;
++	hba->reply_queue = (u8 *)hba->reply_queue_ptr + reply_queue_offset;
++	hba->reply_queue_pgcount = ret;
++
++	return 0;
++}
++
++void megasas_unmap_reply_queue(struct rts_megasas_hba *hba)
++{
++	int i;
++
++	hba->reply_queue = NULL;
++	if (hba->reply_queue_ptr) {
++		vunmap(hba->reply_queue_ptr);
++		hba->reply_queue_ptr = NULL;
++	}
++
++	for (i = 0; i < hba->reply_queue_pgcount; i++)
++		put_page(hba->reply_queue_pages[i]);
++	hba->reply_queue_pgcount = 0;
++	if (hba->reply_queue_pages) {
++		kfree(hba->reply_queue_pages);
++		hba->reply_queue_pages = NULL;
++	}
++	hba->consumer_pa = NULL;
++	hba->producer_pa = NULL;
++}
++
++uint64_t
++megasas_lun_get_blocks(struct rts_megasas_nexus *rtm_nexus, u32 lun)
++{
++	struct se_node_acl *se_acl;
++	struct se_dev_entry *deve;
++	uint64_t blocks = 0;
++	unsigned long flags;
++
++	if (!rtm_nexus) {
++		pr_debug("no nexus set\n");
++		return 0;
++	}
++	if (lun >= TRANSPORT_MAX_LUNS_PER_TPG) {
++		pr_debug("Invalid LUN number %d\n", lun);
++		return 0;
++	}
++
++	se_acl = rtm_nexus->se_sess->se_node_acl;
++	if (!se_acl) {
++		pr_debug("%s: no session acl\n", __FUNCTION__);
++		return 0;
++	}
++	spin_lock_irqsave(&se_acl->device_list_lock, flags);
++	deve = se_acl->device_list[lun];
++	if (deve && (deve->lun_flags & TRANSPORT_LUNFLAGS_INITIATOR_ACCESS)) {
++		struct se_device *se_dev = deve->se_lun->lun_se_dev;
++		blocks = se_dev->transport->get_blocks(se_dev);
++	}
++	spin_unlock_irqrestore(&se_acl->device_list_lock, flags);
++
++	return blocks;
++}
++
++int
++megasas_lookup_target(struct rts_megasas_cmd *cmd, u32 lun)
++{
++	struct se_node_acl *se_acl;
++	struct se_dev_entry *deve;
++	struct se_cmd *se_cmd;
++	unsigned long flags;
++
++	if (!cmd->rtm_nexus) {
++		pr_debug("no nexus set\n");
++		return 0;
++	}
++	if (lun >= TRANSPORT_MAX_LUNS_PER_TPG) {
++		pr_debug("Invalid LUN number %d\n", lun);
++		return 0;
++	}
++
++	se_acl = cmd->rtm_nexus->se_sess->se_node_acl;
++	if (!se_acl) {
++		pr_debug("%s: no session acl\n", __FUNCTION__);
++		return 0;
++	}
++	se_cmd = &cmd->se_cmd;
++	spin_lock_irqsave(&se_acl->device_list_lock, flags);
++	deve = se_acl->device_list[lun];
++	if (deve && (deve->lun_flags & TRANSPORT_LUNFLAGS_INITIATOR_ACCESS)) {
++		se_cmd->se_deve = deve;
++		se_cmd->se_lun = deve->se_lun;
++		se_cmd->se_dev = deve->se_lun->lun_se_dev;
++		se_cmd->orig_fe_lun = lun;
++		deve->deve_cmds++;
++	}
++	spin_unlock_irqrestore(&se_acl->device_list_lock, flags);
++
++	return se_cmd->se_deve ? 0 : -ENXIO;
++}
++
++void
++megasas_put_target(struct rts_megasas_cmd *cmd)
++{
++	struct se_node_acl *se_acl;
++	struct se_cmd *se_cmd = &cmd->se_cmd;
++	unsigned long flags;
++
++	if (!se_cmd->se_deve)
++		return;
++	if (!cmd->rtm_nexus)
++		return;
++	se_acl = cmd->rtm_nexus->se_sess->se_node_acl;
++	if (!se_acl)
++		return;
++	spin_lock_irqsave(&se_acl->device_list_lock, flags);
++	se_cmd->se_deve->deve_cmds--;
++	se_cmd->se_deve = NULL;
++	se_cmd->se_lun = NULL;
++	spin_unlock_irqrestore(&se_acl->device_list_lock, flags);
++}
++
++uint64_t
++megasas_transport_get_blocks(struct rts_megasas_cmd *cmd)
++{
++	struct se_cmd *se_cmd = &cmd->se_cmd;
++	struct se_device *se_dev;
++	uint64_t blocks = 0;
++
++	if (!se_cmd->se_lun) {
++		pr_debug("no target lun set\n");
++		return 0;
++	}
++	se_dev = se_cmd->se_lun->lun_se_dev;
++	if (se_dev->transport->get_blocks)
++		blocks = se_dev->transport->get_blocks(se_dev);
++
++	return blocks;
++}
++
++int rts_megasas_task_reset(struct rts_megasas_hba *hba,
++			   struct rts_megasas_cmd *cmd)
++{
++	struct se_cmd *se_cmd = NULL;
++	struct se_portal_group *se_tpg;
++	struct se_session *se_sess;
++	struct rts_megasas_tmr *rtm_tmr = NULL;
++	struct rts_megasas_tpg *rtm_tpg;
++	int ret = FAILED, rc;
++
++	if (!cmd->rtm_nexus)
++		return SUCCESS;
++
++	/* Only need to abort actual SCSI commands */
++	if (cmd->frame->header.frame_cmd != MFI_CMD_PD_SCSI_IO &&
++	    cmd->frame->header.frame_cmd != MFI_CMD_LD_SCSI_IO &&
++	    cmd->frame->header.frame_cmd != MFI_CMD_LD_WRITE &&
++	    cmd->frame->header.frame_cmd != MFI_CMD_LD_READ)
++		return SUCCESS;
++
++	/*
++	 * Locate the rts_megasas_hba_t pointer
++	 */
++	se_sess = cmd->rtm_nexus->se_sess;
++	/*
++	 * Locate the tl_tpg and se_tpg pointers from TargetID in sc->device->id
++	 */
++	rtm_tpg = hba->rtm_tpg;
++	if (!rtm_tpg)
++		return SUCCESS;
++
++	se_tpg = &rtm_tpg->se_tpg;
++
++	rtm_tmr = kzalloc(sizeof(struct rts_megasas_tmr), GFP_KERNEL);
++	if (!rtm_tmr) {
++		pr_err("Unable to allocate memory for rtm_tmr\n");
++		goto release;
++	}
++	init_waitqueue_head(&rtm_tmr->tmr_wait);
++
++	se_cmd = &cmd->se_cmd;
++
++	/*
++	 * Initialize struct se_cmd descriptor from target_core_mod infrastructure
++	 */
++	transport_init_se_cmd(se_cmd, se_tpg->se_tpg_tfo, se_sess, 0,
++				DMA_NONE, 0, &cmd->sense_buf[0]);
++
++	rc = core_tmr_alloc_req(se_cmd, rtm_tmr, TMR_LUN_RESET, GFP_KERNEL);
++	if (rc < 0)
++		goto release;
++	if (transport_lookup_tmr_lun(se_cmd, cmd->frame->header.lun_id) < 0)
++		goto release;
++	/*
++	 * Queue the TMR to TCM Core and sleep waiting for
++	 * rts_megasas_queue_tm_rsp() to wake us up.
++	 */
++	se_cmd->se_tmr_req->ref_task_tag = (u32)cmd->context;
++	transport_generic_handle_tmr(se_cmd);
++	wait_event(rtm_tmr->tmr_wait, atomic_read(&rtm_tmr->tmr_complete));
++	/*
++	 * The TMR LUN_RESET has completed, check the response status and
++	 * then release allocations.
++	 */
++	ret = (se_cmd->se_tmr_req->response == TMR_FUNCTION_COMPLETE) ?
++		SUCCESS : FAILED;
++release:
++	if (se_cmd)
++		transport_generic_free_cmd(se_cmd, 1);
++
++	kfree(rtm_tmr);
++	return ret;
++}
++
++static void
++megasas_ctrl_set_properties(struct rts_megasas_hba *hba,
++			    struct mfi_ctrl_props *info)
++{
++	memset(info, 0x0, sizeof(struct mfi_ctrl_props));
++	info->seq_num = 1;
++	info->pred_fail_poll_interval = cpu_to_le16(300);
++	info->intr_throttle_cnt = cpu_to_le16(16);
++	info->intr_throttle_timeout = cpu_to_le16(50);
++	info->rebuild_rate = 30;
++	info->patrol_read_rate = 30;
++	info->bgi_rate = 30;
++	info->cc_rate = 30;
++	info->recon_rate = 30;
++	info->cache_flush_interval = 4;
++	info->spinup_drv_cnt = 2;
++	info->spinup_delay = 12;
++	info->coercion_mode = 2;
++	info->alarm_enable = 1;
++	info->disable_battery_warn = 1;
++	info->ecc_bucket_size = 15;
++	info->ecc_bucket_leak_rate = cpu_to_le16(1440);
++	info->expose_encl_devices = 1;
++	info->maintainPdFailHistory = 1;
++}
++
++static int
++megasas_ctrl_get_info(struct rts_megasas_hba *hba,
++		      struct rts_megasas_cmd *cmd)
++{
++	struct mfi_ctrl_info *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_ctrl_info);
++	int num_ld_disks = 0, lun;
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0x0, cmd->sgl_size);
++
++	info->pci.vendor = cpu_to_le16(PCI_VENDOR_ID_LSI_LOGIC);
++	info->pci.device = cpu_to_le16(PCI_DEVICE_ID_LSI_SAS1078);
++	info->pci.subvendor = cpu_to_le16(PCI_VENDOR_ID_LSI_LOGIC);
++	info->pci.subdevice = cpu_to_le16(0x1013);
++
++	info->host.type = MFI_INFO_HOST_PCIE;
++	info->device.type = MFI_INFO_DEV_SAS3G;
++	/* Currently one target port per HBA */
++	info->device.port_count = 1;
++	info->device.port_addr[0] =
++		cpu_to_le64(hba->rtm_tpg->rtm_tpg_tport->tport_wwpn);
++	for (lun = 0 ; lun < TRANSPORT_MAX_LUNS_PER_TPG; lun ++) {
++		if (!megasas_lun_get_blocks(cmd->rtm_nexus, lun))
++			continue;
++		num_ld_disks++;
++	}
++
++	memcpy(info->product_name, "MegaRAID SAS 9260-4i", 20);
++	snprintf(info->serial_number, 32, "%s", hba->hba_serial);
++	snprintf(info->package_version, 0x60, "%s-RTS", TARGET_CORE_MOD_VERSION);
++	memcpy(info->image_component[0].name, "APP", 3);
++	memcpy(info->image_component[0].version, MEGASAS_VERSION "-RTS", 9);
++	memcpy(info->image_component[0].build_date, __DATE__, 11);
++	memcpy(info->image_component[0].build_time, __TIME__, 8);
++	info->image_component_count = 1;
++	info->current_fw_time = cpu_to_le32(megasas_fw_time());
++	info->max_arms = 32;
++	info->max_spans = 8;
++	info->max_arrays = MEGASAS_MAX_ARRAYS;
++	info->max_lds = hba->fw_luns;
++	info->max_cmds = cpu_to_le16(hba->fw_cmds);
++	info->max_sg_elements = cpu_to_le16(hba->fw_sge);
++	info->max_request_size = cpu_to_le32(DA_FABRIC_MAX_SECTORS);
++	info->lds_present = cpu_to_le16(num_ld_disks);
++	info->pd_present = cpu_to_le16(num_ld_disks);
++	info->pd_disks_present = cpu_to_le16(num_ld_disks);
++	info->hw_present = cpu_to_le32(MFI_INFO_HW_NVRAM |
++				      MFI_INFO_HW_MEM |
++				      MFI_INFO_HW_FLASH);
++	info->memory_size = cpu_to_le16(512);
++	info->nvram_size = cpu_to_le16(32);
++	info->flash_size = cpu_to_le16(16);
++	info->raid_levels = cpu_to_le32(MFI_INFO_RAID_0);
++	info->adapter_ops = cpu_to_le32(MFI_INFO_AOPS_RBLD_RATE |
++				       MFI_INFO_AOPS_SELF_DIAGNOSTIC |
++				       MFI_INFO_AOPS_MIXED_ARRAY);
++	info->ld_ops = cpu_to_le32(MFI_INFO_LDOPS_DISK_CACHE_POLICY |
++				  MFI_INFO_LDOPS_ACCESS_POLICY |
++				  MFI_INFO_LDOPS_IO_POLICY |
++				  MFI_INFO_LDOPS_WRITE_POLICY |
++				  MFI_INFO_LDOPS_READ_POLICY);
++	info->max_strips_per_io = cpu_to_le16(hba->fw_sge);
++	info->stripe_sz_ops.min = 3;
++	info->stripe_sz_ops.max = ffs(DA_FABRIC_MAX_SECTORS + 1) - 1;
++
++	megasas_ctrl_set_properties(hba, &info->properties);
++
++	info->pd_ops = cpu_to_le32(MFI_INFO_PDOPS_FORCE_ONLINE |
++				  MFI_INFO_PDOPS_FORCE_OFFLINE);
++	info->pd_mix_support = cpu_to_le32(MFI_INFO_PDMIX_SAS |
++					  MFI_INFO_PDMIX_SATA |
++					  MFI_INFO_PDMIX_LD);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_mfc_get_defaults(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	struct mfi_defaults *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_defaults);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0x0, dcmd_size);
++	mutex_lock(&hba->rtm_tpg->tpg_mutex);
++	if (cmd->rtm_nexus) {
++		struct se_node_acl *se_acl =
++			cmd->rtm_nexus->se_sess->se_node_acl;
++		struct rts_megasas_nacl *nacl = container_of(se_acl,
++			struct rts_megasas_nacl, se_node_acl);
++		info->sas_addr = cpu_to_le64(nacl->iport_wwpn);
++	}
++	mutex_unlock(&hba->rtm_tpg->tpg_mutex);
++	info->stripe_size = 3;
++	info->flush_time = 4;
++	info->background_rate = 30;
++	info->allow_mix_in_enclosure = 1;
++	info->allow_mix_in_ld = 1;
++	info->direct_pd_mapping = 1;
++	/* Enable for BIOS support */
++	info->bios_enumerate_lds = 1;
++	info->disable_ctrl_r = 1;
++	info->expose_enclosure_devices = 1;
++	info->disable_preboot_cli = 1;
++	info->cluster_disable = 1;
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_get_bios_info(struct rts_megasas_hba *hba,
++			   struct rts_megasas_cmd *cmd)
++{
++	struct mfi_bios_data *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_bios_data);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0x0, dcmd_size);
++	info->continue_on_error = 1;
++	info->verbose = 1;
++	if (megasas_is_jbod(hba->flags)) {
++		info->expose_all_drives = 1;
++	}
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_get_fw_time(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	uint64_t fw_time;
++	size_t dcmd_size = sizeof(fw_time);
++
++	fw_time = cpu_to_le64(megasas_fw_time());
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     (void *)&fw_time, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_set_fw_time(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	uint64_t fw_time;
++	size_t dcmd_size = sizeof(fw_time);
++
++	/* This is a dummy; setting of firmware time is not allowed */
++	cmd->sgl_size -= sg_copy_to_buffer(cmd->sgl, cmd->sgl_count,
++					   (void *)&fw_time, dcmd_size);
++	pr_debug("cmd %llx: set fw time %lld", cmd->context, fw_time);
++	fw_time = cpu_to_le64(megasas_fw_time());
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_event_info(struct rts_megasas_hba *hba,
++		   struct rts_megasas_cmd *cmd)
++{
++	struct mfi_evt_log_state *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_evt_log_state);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0, dcmd_size);
++
++	info->newest_seq_num = cpu_to_le32(hba->event_count);
++	info->shutdown_seq_num = cpu_to_le32(hba->shutdown_event);
++	info->boot_seq_num = cpu_to_le32(hba->boot_event);
++	pr_debug("cmd %llx: event num %d / %d / %d\n",
++		 cmd->context, hba->event_count, hba->shutdown_event,
++		 hba->boot_event);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_event_wait(struct rts_megasas_hba *hba,
++		   struct rts_megasas_cmd *cmd)
++{
++	union mfi_evt event;
++	size_t dcmd_size = sizeof(struct mfi_evt_detail);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	hba->event_count = cpu_to_le32(cmd->frame->dcmd.mbox[0]);
++	event.word = cpu_to_le32(cmd->frame->dcmd.mbox[4]);
++	hba->event_locale = event.members.locale;
++	hba->event_class = event.members.class;
++	pr_debug("cmd %llx: aen wait event %d locale %x class %x\n",
++		 cmd->context, hba->event_count, hba->event_locale,
++		 hba->event_class);
++	megasas_finish_aen(hba);
++	/*
++	 * This is tricky.
++	 * The AEN command needs to be held by firmware, and
++	 * should not be completed with normal processing.
++	 * So we dequeue it here and call completion directly.
++	 */
++	mutex_lock(&hba->frame_lock);
++	list_del_init(&cmd->list);
++	mutex_unlock(&hba->frame_lock);
++	hba->event_cmd = cmd;
++	megasas_set_cmd_status(cmd, MFI_STAT_INVALID_STATUS);
++	cmd->sgl_size -= sizeof(struct mfi_evt_detail);
++	if (cmd->complete)
++		complete_all(cmd->complete);
++	return MFI_STAT_INVALID_STATUS;
++}
++
++static int
++megasas_dcmd_pd_get_list(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	struct mfi_pd_list *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_pd_list);
++	u32 offset, dcmd_limit, num_pd_disks = 0, max_pd_disks;
++	u16 lun_id;
++
++	offset = 8;
++	dcmd_limit = offset + sizeof(struct mfi_pd_address);
++	if (cmd->sgl_size < dcmd_limit) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0, cmd->sgl_size);
++
++	max_pd_disks = (cmd->sgl_size - offset) / sizeof(struct mfi_pd_address);
++	if (max_pd_disks > hba->fw_luns) {
++		max_pd_disks = hba->fw_luns;
++	}
++
++	for (lun_id = 0; lun_id < TRANSPORT_MAX_LUNS_PER_TPG; lun_id++) {
++		if (!megasas_lun_get_blocks(cmd->rtm_nexus, lun_id))
++			continue;
++
++		info->addr[num_pd_disks].device_id = cpu_to_le16(lun_id);
++		info->addr[num_pd_disks].encl_device_id = 0xFFFF;
++		info->addr[num_pd_disks].encl_index = hba->rtm_tpg->tport_tpgt;
++		info->addr[num_pd_disks].slot_number = (lun_id & 0xFF);
++		info->addr[num_pd_disks].scsi_dev_type = TYPE_DISK;
++		info->addr[num_pd_disks].connect_port_bitmap = 0x1;
++		info->addr[num_pd_disks].sas_addr[0] =
++			cpu_to_le64(megasas_get_sata_addr(lun_id));
++		num_pd_disks++;
++		offset += sizeof(struct mfi_pd_address);
++	}
++	pr_debug("cmd %llx: pd get list %d from %d disks",
++		 cmd->context, num_pd_disks, max_pd_disks);
++
++	info->size = cpu_to_le32(offset);
++	info->count = cpu_to_le32(num_pd_disks);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, offset);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_pd_list_query(struct rts_megasas_hba *hba,
++			   struct rts_megasas_cmd *cmd)
++{
++	uint16_t flags;
++
++	/* mbox0 contains flags */
++	flags = le16_to_cpu(cmd->frame->dcmd.mbox[0]);
++	pr_debug("cmd %llx: query pd list flags %x", cmd->context, flags);
++	if (flags == MR_PD_QUERY_TYPE_ALL ||
++	    megasas_is_jbod(hba->flags)) {
++		return megasas_dcmd_pd_get_list(hba, cmd);
++	}
++
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_pd_get_info(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	uint16_t pd_id;
++	struct mfi_pd_info *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_pd_info);
++	uint64_t pd_size;
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++
++	/* mbox0 has the ID */
++	pd_id = le16_to_cpu(cmd->frame->dcmd.mbox[0]);
++	if (megasas_lookup_target(cmd, pd_id) < 0) {
++		pr_debug("cmd %llx: pd id %d invalid", cmd->context, pd_id);
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++	pr_debug("cmd %llx: pd get info pd_id %d", cmd->context, pd_id);
++	pd_size = megasas_transport_get_blocks(cmd);
++	if (pd_size == 0) {
++		pr_debug("cmd %llx: invalid size on pd id %d",
++			 cmd->context, pd_id);
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++	memset(info, 0, dcmd_size);
++	info->inquiry_data[0] = 0x7f; /* Force PQual 0x3, PType 0x1f */
++	info->vpd_page83[0] = 0x7f;
++	spc_emulate_inquiry_std(&cmd->se_cmd, info->inquiry_data);
++	spc_emulate_evpd_83(&cmd->se_cmd, info->vpd_page83);
++	megasas_put_target(cmd);
++	/* Finished, set FW state */
++	if ((info->inquiry_data[0] >> 5) == 0) {
++		if (megasas_is_jbod(cmd->flags)) {
++			info->fw_state = cpu_to_le16(MFI_PD_STATE_SYSTEM);
++		} else {
++			info->fw_state = cpu_to_le16(MFI_PD_STATE_ONLINE);
++		}
++	} else {
++		info->fw_state = cpu_to_le16(MFI_PD_STATE_OFFLINE);
++	}
++
++	info->ref.v.device_id = cpu_to_le16(pd_id);
++	info->state.ddf.pd_type = cpu_to_le16(MFI_PD_DDF_TYPE_IN_VD|
++					     MFI_PD_DDF_TYPE_INTF_SAS);
++	info->raw_size = cpu_to_le64(pd_size);
++	info->non_coerced_size = cpu_to_le64(pd_size);
++	info->coerced_size = cpu_to_le64(pd_size);
++	info->encl_device_id = 0xFFFF;
++	info->slot_number = hba->rtm_tpg->tport_tpgt;
++	info->path_info.count = 1;
++	info->path_info.sas_addr[0] =
++		cpu_to_le64(megasas_get_sata_addr(pd_id));
++	info->connected_port_bitmap = 0x1;
++	info->device_speed = 1;
++	info->link_speed = 1;
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_ld_get_list(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	struct mfi_ld_list *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_ld_list);
++	int lun_id;
++	uint32_t num_ld_disks = 0, max_ld_disks = hba->fw_luns;
++	uint64_t ld_size;
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	memset(info, 0, dcmd_size);
++
++	if (megasas_is_jbod(hba->flags)) {
++		max_ld_disks = 0;
++	}
++
++	for (lun_id = 0; lun_id < TRANSPORT_MAX_LUNS_PER_TPG; lun_id++) {
++		if (num_ld_disks >= max_ld_disks) {
++			break;
++		}
++		/* Logical device size is in blocks */
++		ld_size = megasas_lun_get_blocks(cmd->rtm_nexus, lun_id);
++		if (ld_size == 0)
++			continue;
++
++		info->ld_list[num_ld_disks].ld.v.target_id = lun_id;
++		info->ld_list[num_ld_disks].ld.v.lun_id = 0;
++		info->ld_list[num_ld_disks].state = MFI_LD_STATE_OPTIMAL;
++		info->ld_list[num_ld_disks].size = cpu_to_le64(ld_size);
++		num_ld_disks++;
++	}
++	info->ld_count = cpu_to_le32(num_ld_disks);
++	pr_debug("cmd %llx: ld get list %d from %d disks",
++		 cmd->context, num_ld_disks, max_ld_disks);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_ld_get_info(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	struct mfi_ld_info *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_ld_info);
++	u16 ld_id;
++	u32 max_ld_disks = hba->fw_luns;
++	u64 ld_size;
++	u16 sdev_id;
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++
++	/* mbox0 has the ID */
++	ld_id = le16_to_cpu(cmd->frame->dcmd.mbox[0]);
++	pr_debug("cmd %llx: LD get info ld_id %d", cmd->context, ld_id);
++
++	if (megasas_is_jbod(hba->flags)) {
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++
++	if (ld_id >= max_ld_disks)
++		return MFI_STAT_INVALID_PARAMETER;
++
++	if (megasas_lookup_target(cmd, ld_id) < 0) {
++		pr_debug("cmd %llx: ld id %d invalid", cmd->context, ld_id);
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++	/* Logical device size is in blocks */
++	ld_size = megasas_transport_get_blocks(cmd);
++	if (ld_size == 0) {
++		pr_debug("cmd %llx: invalid size on ld id %d",
++			 cmd->context, ld_id);
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++
++	memset(info, 0x0, dcmd_size);
++	spc_emulate_evpd_83(&cmd->se_cmd, info->vpd_page83);
++	megasas_put_target(cmd);
++	sdev_id = (hba->rtm_tpg->tport_tpgt & 0xFF << 8) |
++		(ld_id & 0xFF);
++	info->ld_config.params.state = MFI_LD_STATE_OPTIMAL;
++	info->ld_config.properties.ld.v.target_id = ld_id;
++	info->ld_config.params.stripe_size = 3;
++	info->ld_config.params.num_drives = 1;
++	info->ld_config.params.is_consistent = 1;
++	info->size = cpu_to_le64(ld_size);
++	memset(info->ld_config.span, 0, sizeof(info->ld_config.span));
++	info->ld_config.span[0].start_block = 0;
++	info->ld_config.span[0].num_blocks = info->size;
++	info->ld_config.span[0].array_ref = cpu_to_le16(sdev_id);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_cfg_read(struct rts_megasas_hba *hba,
++		      struct rts_megasas_cmd *cmd)
++{
++	size_t dcmd_size = 4096;
++	struct mfi_config_data *info = cmd->sgl_buf;
++	int num_pd_disks = 0, array_offset, ld_offset;
++	u8 target_id = hba->rtm_tpg->tport_tpgt;
++	int lun_id, i;
++
++	if (cmd->sgl_size > 4096) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++
++	for (lun_id = 0; lun_id < TRANSPORT_MAX_LUNS_PER_TPG; lun_id++) {
++		if (!megasas_lun_get_blocks(cmd->rtm_nexus, lun_id))
++			continue;
++
++		num_pd_disks++;
++	}
++
++	/*
++	 * Array mapping:
++	 * - One array per SCSI device
++	 * - One logical drive per SCSI device
++	 *   spanning the entire device
++	 */
++	info->array_count = num_pd_disks;
++	info->array_size = sizeof(struct mfi_array) * num_pd_disks;
++	info->log_drv_count = num_pd_disks;
++	info->log_drv_size = sizeof(struct mfi_ld_config) * num_pd_disks;
++	info->spares_count = 0;
++	info->spares_size = sizeof(struct mfi_spare);
++	info->size = sizeof(struct mfi_config_data) + info->array_size +
++		info->log_drv_size;
++	if (info->size > 4096) {
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++
++	array_offset = sizeof(struct mfi_config_data);
++	ld_offset = array_offset + sizeof(struct mfi_array) * num_pd_disks;
++
++	for (lun_id = 0; lun_id < TRANSPORT_MAX_LUNS_PER_TPG; lun_id++) {
++		struct mfi_array *array;
++		struct mfi_ld_config *ld;
++		uint64_t pd_size;
++		u16 sdev_id = ((target_id & 0xFF) << 8) | (lun_id & 0xFF);
++
++		pd_size = megasas_lun_get_blocks(cmd->rtm_nexus, lun_id);
++		if (pd_size == 0)
++			continue;
++
++		array = (struct mfi_array *)(cmd->sgl_buf + array_offset);
++		array->size = cpu_to_le64(pd_size);
++		array->num_drives = 1;
++		array->array_ref = cpu_to_le16(sdev_id);
++		array->pd[0].ref.v.device_id = cpu_to_le16(sdev_id);
++		array->pd[0].ref.v.seq_num = 0;
++		array->pd[0].fw_state = MFI_PD_STATE_ONLINE;
++		array->pd[0].encl.pd = 0xFF;
++		array->pd[0].encl.slot = hba->rtm_tpg->tport_tpgt;
++		for (i = 1; i < MFI_MAX_ROW_SIZE; i++) {
++			array->pd[i].ref.v.device_id = 0xFFFF;
++			array->pd[i].ref.v.seq_num = 0;
++			array->pd[i].fw_state = MFI_PD_STATE_UNCONFIGURED_GOOD;
++			array->pd[i].encl.pd = 0xFF;
++			array->pd[i].encl.slot = 0xFF;
++		}
++		array_offset += sizeof(struct mfi_array);
++		ld = (struct mfi_ld_config *)(cmd->sgl_buf + ld_offset);
++		memset(ld, 0, sizeof(struct mfi_ld_config));
++		ld->properties.ld.v.target_id = (lun_id & 0xFF);
++		ld->properties.default_cache_policy =
++			MR_LD_CACHE_READ_AHEAD |
++			MR_LD_CACHE_READ_ADAPTIVE;
++		ld->properties.current_cache_policy =
++			MR_LD_CACHE_READ_AHEAD |
++			MR_LD_CACHE_READ_ADAPTIVE;
++		ld->params.state = MFI_LD_STATE_OPTIMAL;
++		ld->params.stripe_size = 3;
++		ld->params.num_drives = 1;
++		ld->params.span_depth = 1;
++		ld->params.is_consistent = 1;
++		ld->span[0].start_block = 0;
++		ld->span[0].num_blocks = cpu_to_le64(pd_size);
++		ld->span[0].array_ref = cpu_to_le16(sdev_id);
++		ld_offset += sizeof(struct mfi_ld_config);
++	}
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_get_properties(struct rts_megasas_hba *hba,
++			    struct rts_megasas_cmd *cmd)
++{
++	struct mfi_ctrl_props *info = cmd->sgl_buf;
++	size_t dcmd_size = sizeof(struct mfi_ctrl_props);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	megasas_ctrl_set_properties(hba, info);
++
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_cache_flush(struct rts_megasas_hba *hba,
++		    struct rts_megasas_cmd *cmd)
++{
++	/* Hmmm */
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_ctrl_shutdown(struct rts_megasas_hba *hba,
++		      struct rts_megasas_cmd *cmd)
++{
++	megasas_finish_aen(hba);
++	hba->fw_state = MFI_FWSTATE_READY;
++
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_cluster_reset_ld(struct rts_megasas_hba *hba,
++			 struct rts_megasas_cmd *cmd)
++{
++	return MFI_STAT_INVALID_DCMD;
++}
++
++static int
++megasas_dcmd_set_properties(struct rts_megasas_hba *hba,
++			    struct rts_megasas_cmd *cmd)
++{
++	size_t dcmd_size = sizeof(struct mfi_ctrl_props);
++
++	if (cmd->sgl_size < dcmd_size) {
++		pr_debug("cmd %llx: invalid xfer len %zu dcmd %zu",
++			 cmd->context, cmd->sgl_size, dcmd_size);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	cmd->sgl_size -= sg_copy_from_buffer(cmd->sgl, cmd->sgl_count,
++					     cmd->sgl_buf, dcmd_size);
++	pr_debug("cmd %llx: unsupported dcmd set properties, iov size %zu",
++		 cmd->context, cmd->sgl_size);
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_dcmd_dummy(struct rts_megasas_hba *hba,
++		   struct rts_megasas_cmd *cmd)
++{
++	pr_debug("cmd %llx: dcmd dummy size %zu",
++		 cmd->context, cmd->sgl_size);
++	cmd->sgl_size = 0;
++	return MFI_STAT_OK;
++}
++
++static const struct dcmd_cmd_tbl_t {
++	int opcode;
++	const char *desc;
++	int (*func)(struct rts_megasas_hba *, struct rts_megasas_cmd *);
++} dcmd_cmd_tbl[] = {
++	{ MFI_DCMD_CTRL_MFI_HOST_MEM_ALLOC, "CTRL_HOST_MEM_ALLOC",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_GET_INFO, "CTRL_GET_INFO",
++	  megasas_ctrl_get_info },
++	{ MFI_DCMD_CTRL_GET_PROPERTIES, "CTRL_GET_PROPERTIES",
++	  megasas_dcmd_get_properties },
++	{ MFI_DCMD_CTRL_SET_PROPERTIES, "CTRL_SET_PROPERTIES",
++	  megasas_dcmd_set_properties },
++	{ MFI_DCMD_CTRL_ALARM_GET, "CTRL_ALARM_GET",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_ALARM_ENABLE, "CTRL_ALARM_ENABLE",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_ALARM_DISABLE, "CTRL_ALARM_DISABLE",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_ALARM_SILENCE, "CTRL_ALARM_SILENCE",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_ALARM_TEST, "CTRL_ALARM_TEST",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_EVENT_GETINFO, "CTRL_EVENT_GETINFO",
++	  megasas_event_info },
++	{ MFI_DCMD_CTRL_EVENT_GET, "CTRL_EVENT_GET",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_EVENT_WAIT, "CTRL_EVENT_WAIT",
++	  megasas_event_wait },
++	{ MFI_DCMD_CTRL_SHUTDOWN, "CTRL_SHUTDOWN",
++	  megasas_ctrl_shutdown },
++	{ MFI_DCMD_HIBERNATE_STANDBY, "CTRL_STANDBY",
++	  megasas_ctrl_shutdown },
++	{ MFI_DCMD_CTRL_GET_TIME, "CTRL_GET_TIME",
++	  megasas_dcmd_get_fw_time },
++	{ MFI_DCMD_CTRL_SET_TIME, "CTRL_SET_TIME",
++	  megasas_dcmd_set_fw_time },
++	{ MFI_DCMD_CTRL_BIOS_DATA_GET, "CTRL_BIOS_DATA_GET",
++	  megasas_dcmd_get_bios_info },
++	{ MFI_DCMD_CTRL_FACTORY_DEFAULTS, "CTRL_FACTORY_DEFAULTS",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_MFC_DEFAULTS_GET, "CTRL_MFC_DEFAULTS_GET",
++	  megasas_mfc_get_defaults },
++	{ MFI_DCMD_CTRL_MFC_DEFAULTS_SET, "CTRL_MFC_DEFAULTS_SET",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CTRL_CACHE_FLUSH, "CTRL_CACHE_FLUSH",
++	  megasas_cache_flush },
++	{ MFI_DCMD_PD_GET_LIST, "PD_GET_LIST",
++	  megasas_dcmd_pd_get_list },
++	{ MFI_DCMD_PD_LIST_QUERY, "PD_LIST_QUERY",
++	  megasas_dcmd_pd_list_query },
++	{ MFI_DCMD_PD_GET_INFO, "PD_GET_INFO",
++	  megasas_dcmd_pd_get_info },
++	{ MFI_DCMD_PD_STATE_SET, "PD_STATE_SET",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_PD_REBUILD, "PD_REBUILD",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_PD_BLINK, "PD_BLINK",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_PD_UNBLINK, "PD_UNBLINK",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_LD_GET_LIST, "LD_GET_LIST",
++	  megasas_dcmd_ld_get_list},
++	{ MFI_DCMD_LD_GET_INFO, "LD_GET_INFO",
++	  megasas_dcmd_ld_get_info },
++	{ MFI_DCMD_LD_GET_PROP, "LD_GET_PROP",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_LD_SET_PROP, "LD_SET_PROP",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_LD_DELETE, "LD_DELETE",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CFG_READ, "CFG_READ",
++	  megasas_dcmd_cfg_read },
++	{ MFI_DCMD_CFG_ADD, "CFG_ADD",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CFG_CLEAR, "CFG_CLEAR",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CFG_FOREIGN_READ, "CFG_FOREIGN_READ",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CFG_FOREIGN_IMPORT, "CFG_FOREIGN_IMPORT",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_BBU_STATUS, "BBU_STATUS",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_BBU_CAPACITY_INFO, "BBU_CAPACITY_INFO",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_BBU_DESIGN_INFO, "BBU_DESIGN_INFO",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_BBU_PROP_GET, "BBU_PROP_GET",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CLUSTER, "CLUSTER",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CLUSTER_RESET_ALL, "CLUSTER_RESET_ALL",
++	  megasas_dcmd_dummy },
++	{ MFI_DCMD_CLUSTER_RESET_LD, "CLUSTER_RESET_LD",
++	  megasas_cluster_reset_ld },
++	{ -1, NULL, NULL }
++};
++
++static int
++megasas_handle_dcmd(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	int opcode;
++	int retval = 0;
++	const struct dcmd_cmd_tbl_t *cmdptr = dcmd_cmd_tbl;
++	size_t sgl_size = cmd->sgl_size;
++
++	cmd->rtm_nexus = hba->rtm_tpg->rtm_tpg_nexus;
++
++	cmd->sgl_buf = kzalloc(cmd->sgl_size, GFP_KERNEL);
++	if (!cmd->sgl_buf) {
++		pr_err("cmd %llx: could not allocate "
++		       "dcmd buffer, size %zd\n",
++		       cmd->context, cmd->sgl_size);
++		return MFI_STAT_MEMORY_NOT_AVAILABLE;
++	}
++	opcode = le32_to_cpu(cmd->frame->dcmd.opcode);
++	pr_debug("cmd %llx: handle dcmd opcode %d\n", cmd->context, opcode);
++	while (cmdptr->opcode != -1 && cmdptr->opcode != opcode) {
++		cmdptr++;
++	}
++	if (cmdptr->opcode == -1) {
++		pr_debug("cmd %llx: unhandled dcmd opcode %x len %zd\n",
++			 cmd->context, opcode, cmd->sgl_size);
++		retval = megasas_dcmd_dummy(hba, cmd);
++	} else {
++		pr_debug("cmd %llx: dcmd %s len %zd\n",
++			 cmd->context, cmdptr->desc, cmd->sgl_size);
++		retval = cmdptr->func(hba, cmd);
++	}
++	/* Content has been copied into sgl by the handler functions */
++	kfree(cmd->sgl_buf);
++	cmd->sgl_buf = NULL;
++	if (retval != MFI_STAT_INVALID_STATUS) {
++		pr_debug("cmd %llx: finish dcmd iov resid %zu size %zu\n",
++			 cmd->context, cmd->sgl_size, sgl_size);
++	}
++	return retval;
++}
++
++static int rts_megasas_submit_frame(struct rts_megasas_cmd *cmd)
++{
++	struct se_cmd *se_cmd = &cmd->se_cmd;
++	enum dma_data_direction data_direction;
++	int rc;
++
++	if (cmd->flags & MFI_FRAME_DIR_WRITE)
++		data_direction = DMA_TO_DEVICE;
++	else if (cmd->flags & MFI_FRAME_DIR_READ)
++		data_direction = DMA_FROM_DEVICE;
++	else
++		data_direction = DMA_NONE;
++
++	rc = target_submit_cmd_map_sgls(se_cmd, cmd->rtm_nexus->se_sess,
++					cmd->cdb, &cmd->sense_buf[0],
++					cmd->frame->header.lun_id,
++					cmd->sgl_size, 0, data_direction, 0,
++					cmd->sgl, cmd->sgl_count, NULL, 0);
++	if (!rc)
++		return MFI_STAT_INVALID_STATUS;
++
++	return MFI_STAT_DEVICE_NOT_FOUND;
++}
++
++static int
++megasas_handle_scsi(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd,
++		    bool is_logical)
++{
++	/* Copy over CDB */
++	memcpy(cmd->cdb, cmd->frame->pass.cdb, 16);
++
++	cmd->sgl_size = le32_to_cpu(cmd->frame->header.data_len);
++	cmd->rtm_nexus = hba->rtm_tpg->rtm_tpg_nexus;
++
++	if (!cmd->rtm_nexus ||
++	    !megasas_lun_get_blocks(cmd->rtm_nexus,
++				    cmd->frame->header.target_id)) {
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++	pr_debug("cmd %llx: handle %s scsi cmd %s %x dev %d/%d size %zu\n",
++		 cmd->context, is_logical ? "logical" : "physical",
++		 mfi_frame_desc[cmd->frame->header.frame_cmd], cmd->cdb[0],
++		 cmd->frame->header.target_id, cmd->frame->header.lun_id,
++		 cmd->sgl_size);
++
++	return rts_megasas_submit_frame(cmd);
++}
++
++static int
++megasas_handle_io(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd,
++		  bool is_write)
++{
++	uint32_t lba_count, lba_start_hi, lba_start_lo;
++	uint64_t lba_start;
++
++	lba_count = le32_to_cpu(cmd->frame->io.header.data_len);
++	lba_start_lo = le32_to_cpu(cmd->frame->io.lba_lo);
++	lba_start_hi = le32_to_cpu(cmd->frame->io.lba_hi);
++	lba_start = ((uint64_t)lba_start_hi << 32) | lba_start_lo;
++
++	cmd->rtm_nexus = hba->rtm_tpg->rtm_tpg_nexus;
++	if (!cmd->rtm_nexus ||
++	    !megasas_lun_get_blocks(cmd->rtm_nexus,
++				    cmd->frame->header.target_id)) {
++		return MFI_STAT_DEVICE_NOT_FOUND;
++	}
++
++	pr_debug("cmd %llx: handle io %s dev %d/%d lba %lu count %ld\n",
++		 cmd->context, mfi_frame_desc[cmd->frame->header.frame_cmd],
++		 cmd->frame->header.target_id, cmd->frame->header.lun_id,
++		 (unsigned long)lba_start, (unsigned long)lba_count);
++
++	megasas_encode_lba(cmd->cdb, lba_start, lba_count, is_write);
++
++	return rts_megasas_submit_frame(cmd);
++}
++
++int
++megasas_handle_abort(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	u64 abort_ctx = le64_to_cpu(cmd->frame->abort.abort_context);
++	u32 addr_hi, addr_lo;
++	u64 abort_addr;
++	struct rts_megasas_cmd *abort_cmd;
++
++	if (!megasas_use_queue64(hba->flags)) {
++		abort_ctx &= (uint64_t)0xFFFFFFFF;
++	}
++	addr_hi = le32_to_cpu(cmd->frame->abort.abort_mfi_addr_hi);
++	addr_lo = le32_to_cpu(cmd->frame->abort.abort_mfi_addr_lo);
++	abort_addr = ((u64)addr_hi << 32) | addr_lo;
++
++	abort_cmd = megasas_lookup_frame(hba, (void *)abort_addr);
++	if (!abort_cmd) {
++		if (hba->event_cmd) {
++			abort_cmd = hba->event_cmd;
++		} else {
++			pr_debug("cmd %llx: no frame for abort context %llx\n",
++				 cmd->context, abort_ctx);
++			hba->event_count++;
++			return MFI_STAT_OK;
++		}
++	}
++	if (abort_cmd->context != abort_ctx) {
++		pr_debug("cmd %llx: invalid abort context %llx\n",
++			 cmd->context, abort_cmd->context);
++		hba->event_count++;
++		return MFI_STAT_ABORT_NOT_POSSIBLE;
++	}
++	pr_debug("cmd %llx: abort frame %llx\n",
++		 cmd->context, abort_cmd->context);
++	if (abort_cmd == hba->event_cmd)
++		megasas_finish_aen(hba);
++	else
++		rts_megasas_task_reset(hba, abort_cmd);
++	hba->event_count++;
++	return MFI_STAT_OK;
++}
++
++static int
++megasas_init_firmware(struct rts_megasas_hba *hba, struct rts_megasas_cmd *cmd)
++{
++	uint32_t pa_lo, pa_hi;
++	uint64_t iq_pa, rq_pa;
++	struct page *page;
++	unsigned long flags;
++	struct mfi_init_qinfo initq;
++	size_t initq_size = sizeof(struct mfi_init_qinfo);
++	void __user *_iq_pa, *reply_queue_pa;
++	void *iq_ptr;
++	uintptr_t offset;
++	int len, ret = MFI_STAT_INVALID_PARAMETER;
++
++	/* init frames can never be posted in the reply queue */
++	cmd->flags |= MFI_FRAME_DONT_POST_IN_REPLY_QUEUE;
++
++	pa_lo = le32_to_cpu(cmd->frame->init.qinfo_new_addr_lo);
++	pa_hi = le32_to_cpu(cmd->frame->init.qinfo_new_addr_hi);
++	iq_pa = (((uint64_t) pa_hi << 32) | pa_lo);
++	_iq_pa = map_guest_to_host(hba, iq_pa, initq_size);
++	if (unlikely(IS_ERR(_iq_pa))) {
++		pr_warn("cmd %llx: failed to map initq %p, error %ld\n",
++			cmd->context, (void *)iq_pa, PTR_ERR(_iq_pa));
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	ret = get_user_pages(current, hba->mm,
++			     (uintptr_t)_iq_pa, 1, false, 0, &page, NULL);
++	if (unlikely(ret != 1)) {
++		pr_warn("cmd %llx: cannot get initq page\n",
++			cmd->context);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	iq_ptr = kmap_atomic(page);
++	if (unlikely(!iq_ptr)) {
++		put_page(page);
++		pr_warn("cmd %llx: cannot map initq page\n",
++			cmd->context);
++		return MFI_STAT_INVALID_PARAMETER;
++	}
++	offset = (uintptr_t)_iq_pa & ~PAGE_MASK;
++	memcpy(&initq,(u8 *)iq_ptr + offset,
++	       sizeof(struct mfi_init_qinfo));
++	kunmap_atomic(iq_ptr);
++	put_page(page);
++
++	flags = le32_to_cpu(initq.flags);
++	if (flags & MFI_QUEUE_FLAG_CONTEXT64) {
++		hba->flags |= MEGASAS_MASK_USE_QUEUE64;
++	}
++	hba->reply_queue_len = le32_to_cpu(initq.rq_entries) & 0xFFFF;
++	pa_lo = le32_to_cpu(initq.rq_addr_lo);
++	pa_hi = le32_to_cpu(initq.rq_addr_hi);
++	rq_pa = ((uint64_t) pa_hi << 32) | pa_lo;
++	if (megasas_use_queue64(hba->flags))
++		len = hba->reply_queue_len * sizeof(uint64_t);
++	else
++		len = hba->reply_queue_len * sizeof(uint32_t);
++	reply_queue_pa = map_guest_to_host(hba, rq_pa, len);
++	if (unlikely(IS_ERR(reply_queue_pa))) {
++		pr_warn("cmd %llx: failed to map reply queue %p, error %ld\n",
++			cmd->context, (void *)rq_pa,
++			PTR_ERR(reply_queue_pa));
++		goto out;
++	}
++	ret = megasas_map_reply_queue(hba, (uintptr_t)reply_queue_pa,
++				      _count_pages(rq_pa, len));
++	if (unlikely(ret)) {
++		pr_err("cmd %llx: failed to map reply queue, error %d\n",
++		       cmd->context, ret);
++		goto out;
++	}
++
++	pa_lo = le32_to_cpu(initq.ci_addr_lo);
++	pa_hi = le32_to_cpu(initq.ci_addr_hi);
++	iq_pa = ((uint64_t) pa_hi << 32) | pa_lo;
++	hba->consumer_pa = map_guest_to_host(hba, iq_pa, sizeof(uint64_t));
++	if (unlikely(IS_ERR(hba->consumer_pa))) {
++		pr_warn("cmd %llx: failed to map consumer_pa %p, error %ld\n",
++			cmd->context, (void *)iq_pa,
++			PTR_ERR(hba->consumer_pa));
++		goto out_unmap;
++	}
++	pa_lo = le32_to_cpu(initq.pi_addr_lo);
++	pa_hi = le32_to_cpu(initq.pi_addr_hi);
++	iq_pa = ((uint64_t) pa_hi << 32) | pa_lo;
++	hba->producer_pa = map_guest_to_host(hba, iq_pa, sizeof(uint64_t));
++	if (unlikely(IS_ERR(hba->producer_pa))) {
++		pr_warn("cmd %llx: failed to map producer_pa %p, error %ld\n",
++			cmd->context, (void *)iq_pa,
++			PTR_ERR(hba->producer_pa));
++		goto out_unmap;
++	}
++	hba->reply_queue_head = megasas_get_reply_queue_head(hba);
++	if (unlikely(hba->reply_queue_head == (u32)-1)) {
++		pr_err("cmd %llx: could not copy queue head counter\n",
++		       cmd->context);
++		goto out_unmap;
++	}
++	hba->reply_queue_tail = megasas_get_reply_queue_tail(hba);
++	if (unlikely(hba->reply_queue_tail == (u32)-1)) {
++		pr_err("cmd %llx: could not copy queue tail counter\n",
++		       cmd->context);
++		goto out_unmap;
++	}
++	hba->fw_state = MFI_FWSTATE_OPERATIONAL;
++	pr_debug("cmd %llx: reply queue len %d, queue %d/%d\n", cmd->context,
++		 hba->reply_queue_len, hba->reply_queue_head,
++		 hba->reply_queue_tail);
++
++	return MFI_STAT_OK;
++out_unmap:
++	megasas_unmap_reply_queue(hba);
++out:
++	return ret;
++}
++
++static void rts_megasas_submission_work(struct work_struct *work)
++{
++	struct rts_megasas_cmd *cmd =
++		container_of(work, struct rts_megasas_cmd, work);
++	int frame_status = MFI_STAT_INVALID_STATUS;
++	bool is_write = false;
++
++	if (megasas_map_sgl(cmd->rtm_hba, cmd)) {
++		pr_err("cmd %llx: failed to map sgl\n", cmd->context);
++		cmd->rtm_hba->event_count++;
++		frame_status = MFI_STAT_INVALID_SGL;
++	} else {
++		switch (cmd->frame->header.frame_cmd) {
++		case MFI_CMD_INIT:
++			frame_status = megasas_init_firmware(cmd->rtm_hba, cmd);
++			break;
++		case MFI_CMD_DCMD:
++			frame_status = megasas_handle_dcmd(cmd->rtm_hba, cmd);
++			break;
++		case MFI_CMD_PD_SCSI_IO:
++			frame_status = megasas_handle_scsi(cmd->rtm_hba, cmd, 0);
++			break;
++		case MFI_CMD_LD_SCSI_IO:
++			frame_status = megasas_handle_scsi(cmd->rtm_hba, cmd, 1);
++			break;
++		case MFI_CMD_LD_WRITE:
++			is_write = true;
++		case MFI_CMD_LD_READ:
++			frame_status = megasas_handle_io(cmd->rtm_hba, cmd, is_write);
++			break;
++		case MFI_CMD_ABORT:
++			frame_status = megasas_handle_abort(cmd->rtm_hba, cmd);
++			break;
++		default:
++			pr_debug("cmd %llx: unhandled frame command %d\n",
++				 cmd->context, cmd->frame->header.frame_cmd);
++			cmd->rtm_hba->event_count++;
++			frame_status = MFI_STAT_INVALID_CMD;
++			break;
++		}
++	}
++	if (frame_status != MFI_STAT_INVALID_STATUS) {
++		megasas_set_cmd_status(cmd, frame_status);
++		if (cmd->complete)
++			complete_all(cmd->complete);
++		else
++			megasas_dequeue_frame(cmd->rtm_hba, cmd);
++	}
++}
++
++u8
++megasas_handle_frame(struct rts_megasas_hba *hba,
++		     u8 __user *frame_addr, u8 frame_count)
++{
++	u8 frame_status = MFI_STAT_INVALID_STATUS;
++	u64 frame_context;
++	struct rts_megasas_cmd *cmd;
++	DECLARE_COMPLETION_ONSTACK(comp);
++	int wait_for_frame = 0;
++
++	/*
++	 * Always read 64bit context, top bits will be
++	 * masked out if required in megasas_enqueue_frame()
++	 */
++	frame_context = megasas_frame_get_context(frame_addr);
++	if (frame_context == (u64)-1) {
++		frame_status = MFI_STAT_INVALID_PARAMETER;
++		megasas_frame_set_cmd_status(frame_addr, frame_status);
++		hba->event_count++;
++		return frame_status;
++	}
++
++	cmd = megasas_enqueue_frame(hba, frame_addr,
++				    frame_context, frame_count);
++	if (IS_ERR(cmd)) {
++		if (PTR_ERR(cmd) == -EBUSY) {
++			/* reply queue full */
++			pr_err("cmd %llx: all frames busy\n", frame_context);
++			frame_status = MFI_STAT_SCSI_DONE_WITH_ERROR;
++			megasas_frame_set_scsi_status(frame_addr, BUSY);
++		} else {
++			/* reply internal error */
++			frame_status = MFI_STAT_INVALID_PARAMETER;
++		}
++		megasas_frame_set_cmd_status(frame_addr, frame_status);
++		megasas_complete_frame(hba, frame_context, frame_status);
++		hba->event_count++;
++		return frame_status;
++	}
++	if (!hba->irqfd_ctx) {
++		cmd->complete = &comp;
++		wait_for_frame = 1;
++	}
++	cmd->rtm_hba = hba;
++	INIT_WORK(&cmd->work, rts_megasas_submission_work);
++	queue_work(hba->workqueue, &cmd->work);
++	/* cmd might be invalid after this point */
++	if (wait_for_frame) {
++		pr_debug("cmd %llx: wait for completion\n", cmd->context);
++		wait_for_completion(&comp);
++		frame_status = megasas_get_cmd_status(cmd);
++		megasas_dequeue_frame(hba, cmd);
++	}
++
++	return frame_status;
++}
++
++int rts_megasas_queue_data_in(struct se_cmd *se_cmd)
++{
++	struct rts_megasas_cmd *cmd = container_of(se_cmd,
++			struct rts_megasas_cmd, se_cmd);
++	int resid = 0;
++
++	if ((se_cmd->se_cmd_flags & SCF_OVERFLOW_BIT) ||
++	    (se_cmd->se_cmd_flags & SCF_UNDERFLOW_BIT))
++		resid = se_cmd->residual_count;
++
++	megasas_set_scsi_status(cmd, SAM_STAT_GOOD);
++	megasas_set_cmd_status(cmd, MFI_STAT_OK);
++	return 0;
++}
++
++int rts_megasas_queue_status(struct se_cmd *se_cmd)
++{
++	struct rts_megasas_cmd *cmd = container_of(se_cmd,
++			struct rts_megasas_cmd, se_cmd);
++	uint8_t cmd_status = MFI_STAT_SCSI_DONE_WITH_ERROR;
++	int scsi_status;
++
++	if (se_cmd->sense_buffer &&
++	   ((se_cmd->se_cmd_flags & SCF_TRANSPORT_TASK_SENSE) ||
++	    (se_cmd->se_cmd_flags & SCF_EMULATED_TASK_SENSE))) {
++		scsi_status = SAM_STAT_CHECK_CONDITION;
++	} else {
++		scsi_status = se_cmd->scsi_status;
++		if (scsi_status == SAM_STAT_GOOD)
++			cmd_status = MFI_STAT_OK;
++	}
++	if (scsi_status == SAM_STAT_CHECK_CONDITION)
++		megasas_copy_sense(cmd->rtm_hba, cmd);
++	megasas_set_scsi_status(cmd, scsi_status);
++	megasas_set_cmd_status(cmd, cmd_status);
++	return 0;
++}
++
++int rts_megasas_queue_tm_rsp(struct se_cmd *se_cmd)
++{
++	struct se_tmr_req *se_tmr = se_cmd->se_tmr_req;
++	struct rts_megasas_tmr *rtm_tmr = se_tmr->fabric_tmr_ptr;
++
++	/*
++	 * The SCSI EH thread will be sleeping on se_tmr->tl_tmr_wait, go ahead
++	 * and wake up the wait_queue_head_t in rts_megasas_device_reset()
++	 */
++	atomic_set(&rtm_tmr->tmr_complete, 1);
++	wake_up(&rtm_tmr->tmr_wait);
++	return 0;
++}
++
++int rts_megasas_get_cmd_state(struct se_cmd *se_cmd)
++{
++	struct rts_megasas_cmd *cmd = container_of(se_cmd,
++			struct rts_megasas_cmd, se_cmd);
++
++	return cmd->frame->header.cmd_status;
++}
++
++static int rts_megasas_open(struct inode *inode, struct file *f)
++{
++	struct rts_megasas_hba *hba;
++
++	try_module_get(THIS_MODULE);
++	printk(KERN_INFO "Adding HBA\n");
++	hba = kzalloc(sizeof(*hba), GFP_KERNEL);
++	if (!hba)
++		return -ENOMEM;
++	hba->fw_state = MFI_FWSTATE_READY;
++	hba->fw_sge = MEGASAS_MAX_SGE;
++	hba->fw_cmds = MEGASAS_DEFAULT_FRAMES;
++	hba->fw_luns = TRANSPORT_MAX_LUNS_PER_TPG;
++	strncpy(hba->hba_serial, MEGASAS_HBA_SERIAL, 32);
++	hba->workqueue = alloc_workqueue(RTS_MEGASAS_NAME, 0, 0);
++	if (!hba->workqueue) {
++		kfree(hba);
++		return -ENOMEM;
++	}
++	mutex_init(&hba->frame_lock);
++	INIT_LIST_HEAD(&hba->frame_list);
++	spin_lock_init(&hba->reply_queue_lock);
++	printk(KERN_INFO "Added HBA, fw state %x\n", hba->fw_state);
++	f->private_data = hba;
++	return 0;
++}
++
++static int rts_megasas_release(struct inode *inode, struct file *f)
++{
++	struct rts_megasas_hba *hba = f->private_data;
++
++	megasas_reset_frames(hba);
++	megasas_unmap_reply_queue(hba);
++	if (hba->rtm_tpg) {
++		struct rts_megasas_tpg *tpg = hba->rtm_tpg;
++		mutex_lock(&tpg->tpg_mutex);
++		tpg->tpg_hba_count--;
++		hba->rtm_tpg = NULL;
++		mutex_unlock(&tpg->tpg_mutex);
++	}
++	destroy_workqueue(hba->workqueue);
++	if (hba->irqfd_ctx)
++		eventfd_ctx_put(hba->irqfd_ctx);
++	if (hba->irqfd)
++		fput(hba->irqfd);
++	if (hba->doorbell_ctx)
++		eventfd_ctx_put(hba->doorbell_ctx);
++	if (hba->doorbell_fd)
++		fput(hba->doorbell_fd);
++	if (hba->mm) {
++		mmput(hba->mm);
++		hba->mm = NULL;
++	}
++	kfree(hba);
++	printk(KERN_INFO "Removed HBA\n");
++	module_put(THIS_MODULE);
++	return 0;
++}
++
++static long
++rts_megasas_ioc_endpoint(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	long error = 0;
++
++	if (arg == (unsigned long)-1) {
++		if (hba->rtm_tpg) {
++			pr_debug("Detach HBA %d\n", hba->rtm_tpg->tport_tpgt);
++			rts_megasas_clean_endpoint(hba);
++		} else {
++			error = -ENXIO;
++		}
++	} else if (rts_megasas_set_endpoint(hba, arg) < 0)
++		error = -ENXIO;
++	else {
++		pr_debug("Using HBA %ld\n", arg);
++		hba->mm = get_task_mm(current);
++	}
++	return error;
++}
++
++static long
++rts_megasas_ioc_fwstate(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	struct rts_megasas_fwstate __user *user_ioc =
++	    (struct rts_megasas_fwstate __user *)arg;
++	struct rts_megasas_fwstate *ioc;
++	long ret = 0;
++
++	if (!hba->rtm_tpg)
++		return -ENXIO;
++
++	ioc = kzalloc(sizeof(*ioc), GFP_KERNEL);
++	if (!ioc)
++		return -ENOMEM;
++
++	ret = copy_from_user(ioc, user_ioc, sizeof(*ioc));
++	if (unlikely(ret)) {
++		pr_warn("HBA %d: Failed to copy fwstate\n",
++			 hba->rtm_tpg->tport_tpgt);
++		kfree(ioc);
++		return -EFAULT;
++	}
++	if (ioc->fw_state != MFI_FWSTATE_UNDEFINED &&
++	    ioc->fw_state != hba->fw_state) {
++		if (ioc->fw_state == MFI_FWSTATE_READY) {
++			hba->fw_state = ioc->fw_state;
++			hba->fw_sge = ioc->fw_sge;
++			megasas_reset_frames(hba);
++			hba->fw_cmds = ioc->fw_cmds;
++			megasas_unmap_reply_queue(hba);
++		}
++	} else {
++		ioc->fw_state = hba->fw_state;
++	}
++	pr_debug("HBA %d: fwstate %x, %d sges, %d cmds\n",
++		 hba->rtm_tpg->tport_tpgt, hba->fw_state,
++		 hba->fw_sge, hba->fw_cmds);
++
++	ret = copy_to_user(user_ioc, ioc, sizeof(*ioc));
++	if (unlikely(ret)) {
++		pr_warn("HBA %d: Failed to update fwstate\n",
++			 hba->rtm_tpg->tport_tpgt);
++		ret = -EFAULT;
++	}
++	kfree(ioc);
++	return ret;
++}
++
++static long
++rts_megasas_ioc_eventfd(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	struct rts_megasas_eventfd __user *user_ioc =
++	    (struct rts_megasas_eventfd __user *)arg;
++	struct rts_megasas_eventfd *ioc;
++	int error = 0;
++	struct file *eventfd = NULL;
++
++	if (!hba->rtm_tpg)
++		return -ENXIO;
++
++	ioc = kmalloc(sizeof(*ioc), GFP_KERNEL);
++	if (!ioc)
++		return -ENOMEM;
++
++	if (copy_from_user(ioc, user_ioc, sizeof(*ioc))) {
++		error = -EFAULT;
++		goto free_and_out;
++	}
++
++	if (ioc->irqfd > -1) {
++		eventfd = eventfd_fget(ioc->irqfd);
++		if (IS_ERR(eventfd)) {
++			printk(KERN_INFO "invalid irqfd\n");
++			error = -EBADF;
++			goto free_and_out;
++		}
++		pr_debug("Enabling irqfd %p\n", eventfd);
++	} else {
++		pr_debug("Disabling irqfd\n");
++		eventfd = NULL;
++	}
++
++	if (hba->irqfd) {
++		fput(hba->irqfd);
++		hba->irqfd = NULL;
++	}
++	if (hba->irqfd_ctx) {
++		eventfd_ctx_put(hba->irqfd_ctx);
++		hba->irqfd_ctx = NULL;
++	}
++	hba->irqfd = eventfd;
++	if (hba->irqfd) {
++		hba->irqfd_ctx = eventfd_ctx_fileget(hba->irqfd);
++		pr_debug("Enabled irqfd\n");
++	} else
++		pr_debug("Disabled irqfd\n");
++
++	if (ioc->doorbellfd > -1) {
++		eventfd = eventfd_fget(ioc->doorbellfd);
++		if (IS_ERR(eventfd)) {
++			printk(KERN_INFO "invalid doorbellfd\n");
++			error = -EBADF;
++			goto free_and_out;
++		}
++		pr_debug("Enabling doorbellfd %p\n", eventfd);
++	} else {
++		pr_debug("Disabling doorbellfd\n");
++		eventfd = NULL;
++	}
++
++	if (hba->doorbell_fd) {
++		fput(hba->doorbell_fd);
++		hba->doorbell_fd = NULL;
++	}
++	if (hba->doorbell_ctx) {
++		eventfd_ctx_put(hba->doorbell_ctx);
++		hba->doorbell_ctx = NULL;
++	}
++	hba->doorbell_fd = eventfd;
++	if (hba->doorbell_fd) {
++		hba->doorbell_ctx = eventfd_ctx_fileget(hba->doorbell_fd);
++		pr_debug("Enabled doorbell\n");
++	} else
++		pr_debug("Disabled doorbell\n");
++
++free_and_out:
++	kfree(ioc);
++	return error;
++}
++
++static long
++rts_megasas_ioc_firmware(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	struct rts_megasas_iocpacket __user *user_ioc =
++	    (struct rts_megasas_iocpacket __user *)arg;
++	struct rts_megasas_iocpacket *ioc;
++	int error = 0;
++	u8 status;
++
++	ioc = kmalloc(sizeof(*ioc), GFP_KERNEL);
++	if (!ioc)
++		return -ENOMEM;
++
++	if (copy_from_user(ioc, user_ioc, sizeof(*ioc))) {
++		error = -EFAULT;
++		goto free_and_out;
++	}
++	if (!hba->rtm_tpg) {
++		pr_warn("HBA %d: endpoint not set\n", ioc->host_no);
++		error = -ENODEV;
++		goto free_and_out;
++	}
++
++	pr_debug("HBA %d: frame %p\n", ioc->host_no, ioc->frame);
++	status = megasas_handle_frame(hba, ioc->frame, ioc->frame_count);
++	pr_debug("HBA %d: frame status %d\n", ioc->host_no, status);
++
++free_and_out:
++	kfree(ioc);
++	return error;
++}
++
++static long
++rts_megasas_ioc_frame_address(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	void *frame_addr;
++	size_t frame_size = MFI_FRAME_SIZE * MEGASAS_FW_FRAMES;
++	u8 status;
++
++	if (!hba->rtm_tpg) {
++		pr_warn("endpoint not set\n");
++		return -ENODEV;
++	}
++	frame_addr = map_guest_to_host(hba, arg, frame_size);
++	status = megasas_handle_frame(hba, frame_addr, 0);
++	if (status == MFI_STAT_INVALID_STATUS)
++		return -EAGAIN;
++
++	return 0;
++}
++
++static long
++rts_megasas_ioc_doorbell(struct rts_megasas_hba *hba, unsigned long arg)
++{
++	struct rts_megasas_iocqueue __user *user_ioc =
++	    (struct rts_megasas_iocqueue __user *)arg;
++	struct rts_megasas_iocqueue *ioc = NULL;
++	uint32_t reply_queue_head;
++	int ret = 0;
++
++	if (!hba->rtm_tpg) {
++		pr_warn("endpoint not set\n");
++		return -ENODEV;
++	}
++
++	spin_lock_irq(&hba->reply_queue_lock);
++	reply_queue_head = hba->reply_queue_head;
++	spin_unlock_irq(&hba->reply_queue_lock);
++
++	if (user_ioc) {
++		ioc = kmalloc(sizeof(*ioc), GFP_KERNEL);
++		if (!ioc)
++			return -ENOMEM;
++
++		if (copy_from_user(ioc, user_ioc, sizeof(*ioc))) {
++			ret = -EFAULT;
++			goto free_and_out;
++		}
++
++		ioc->new_head = reply_queue_head;
++		ret = copy_to_user(user_ioc, ioc, sizeof(*ioc));
++	}
++free_and_out:
++	if (ioc)
++		kfree(ioc);
++	return ret;
++}
++
++static ssize_t
++rts_megasas_write(struct file *f, const char __user *buf,
++		  size_t nbytes, loff_t *ppos)
++{
++	struct rts_megasas_hba *hba = f->private_data;
++	void __user *frame_addr;
++	u64 frame_val;
++	u8 frame_count;
++	size_t frame_size = MFI_FRAME_SIZE * MEGASAS_FW_FRAMES;
++	int ret;
++
++	if (!hba->rtm_tpg)
++		return -ENODEV;
++
++	ret = simple_write_to_buffer(&frame_val, sizeof(u64),
++					ppos, buf, nbytes);
++	if (ret <= 0) {
++		pr_err("could not fetch frame address, error %d\n", ret);
++		return ret;
++	}
++	frame_addr = map_guest_to_host(hba, frame_val & ~0x1F, frame_size);
++	frame_count = (frame_val >> 1) & 0xF;
++	megasas_handle_frame(hba, frame_addr, frame_count);
++
++	return ret;
++}
++
++static long
++rts_megasas_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
++{
++	struct rts_megasas_hba *hba = f->private_data;
++	long ret;
++
++	switch (cmd) {
++	case MEGASAS_IOC_ENDPOINT:
++		ret = rts_megasas_ioc_endpoint(hba, arg);
++		break;
++	case MEGASAS_IOC_EVENTFD:
++		ret = rts_megasas_ioc_eventfd(hba, arg);
++		break;
++	case MEGASAS_IOC_FIRMWARE:
++		ret = rts_megasas_ioc_firmware(hba, arg);
++		break;
++	case MEGASAS_IOC_FRAME:
++		ret = rts_megasas_ioc_frame_address(hba, arg);
++		break;
++	case MEGASAS_IOC_FWSTATE:
++		ret = rts_megasas_ioc_fwstate(hba, arg);
++		break;
++	case MEGASAS_IOC_DOORBELL:
++		ret = rts_megasas_ioc_doorbell(hba, arg);
++		break;
++	case VHOST_SET_MEM_TABLE:
++		ret = rts_megasas_set_memory(hba, (void *)arg);
++		break;
++	default:
++		ret = -ENOTTY;
++	}
++	return ret;
++}
++
++
++static const struct file_operations _rts_megasas_fops = {
++	.owner		= THIS_MODULE,
++	.release	= rts_megasas_release,
++	.unlocked_ioctl	= rts_megasas_ioctl,
++	.open		= rts_megasas_open,
++	.write		= rts_megasas_write,
++	.llseek		= noop_llseek,
++};
++
++static struct miscdevice _rts_megasas_misc = {
++	.minor		= MISC_DYNAMIC_MINOR,
++	.name		= RTS_MEGASAS_NAME,
++	.fops		= &_rts_megasas_fops
++};
++
++MODULE_ALIAS("devname:" RTS_MEGASAS_NAME);
++
++static int __init rts_megasas_init(void)
++{
++	int ret, rval;
++
++	megasas_frame_cache = KMEM_CACHE(rts_megasas_cmd, 0);
++	if (!megasas_frame_cache) {
++		pr_err("kmem_cache_create() failed for frame cache\n");
++		ret = -ENOMEM;
++		goto out;
++	}
++	megasas_frame_pool = mempool_create_slab_pool(MEGASAS_MAX_FRAMES,
++						      megasas_frame_cache);
++	if (!megasas_frame_pool) {
++		pr_err("mempool_create() failed for frame pool\n");
++		ret = -ENOMEM;
++		goto out_cache_destroy;
++	}
++
++	/*
++	 * Register character device node
++	 */
++	rval = misc_register(&_rts_megasas_misc);
++
++	if (rval < 0) {
++		printk(KERN_DEBUG "megasas: failed to register misc device\n");
++		ret = rval;
++		goto out_pool_destroy;
++	}
++
++	ret = rts_megasas_register_configfs();
++	if (ret < 0)
++		goto out_unregister;
++
++	return 0;
++
++out_unregister:
++	misc_deregister(&_rts_megasas_misc);
++out_pool_destroy:
++	mempool_destroy(megasas_frame_pool);
++out_cache_destroy:
++	kmem_cache_destroy(megasas_frame_cache);
++out:
++	return ret;
++};
++
++static void __exit rts_megasas_exit(void)
++{
++	rts_megasas_deregister_configfs();
++	misc_deregister(&_rts_megasas_misc);
++	mempool_destroy(megasas_frame_pool);
++	kmem_cache_destroy(megasas_frame_cache);
++};
++
++MODULE_DESCRIPTION("RTS_MEGASAS series fabric driver");
++MODULE_LICENSE("GPL");
++module_init(rts_megasas_init);
++module_exit(rts_megasas_exit);
+diff --git a/drivers/target/rts_megasas/rts_megasas_vhost.c b/drivers/target/rts_megasas/rts_megasas_vhost.c
+new file mode 100644
+index 0000000..429e977
+--- /dev/null
++++ b/drivers/target/rts_megasas/rts_megasas_vhost.c
+@@ -0,0 +1,109 @@
++/*
++ * In-kernel MFI-SAS protocol emulation
++ * 
++ * Copyright (c) 2012 RisingTide Systems LLC.
++ *
++ * Functions for vhost handling
++ */
++
++#include <linux/init.h>
++#include <linux/slab.h>
++#include <linux/kthread.h>
++#include <linux/types.h>
++#include <linux/string.h>
++#include <linux/vhost.h>
++
++#include <target/target_core_base.h>
++#include <target/target_core_fabric.h>
++#include <target/target_core_fabric_configfs.h>
++#include <target/target_core_configfs.h>
++#include <target/target_core_backend.h>
++#include <target/configfs_macros.h>
++
++#include <scsi/scsi.h>
++
++#include "mfi.h"
++#include "rts_megasas.h"
++
++#define	VHOST_MEMORY_MAX_NREGIONS  64
++
++/* Can we switch to this memory table? */
++static bool memory_access_ok(struct rts_megasas_hba *hba,
++			     struct vhost_memory *mem)
++{
++	int i;
++	bool ok = true;
++
++	for (i = 0; i < mem->nregions; ++i) {
++		struct vhost_memory_region *m = mem->regions + i;
++		unsigned long a = m->userspace_addr;
++		if (m->memory_size > ULONG_MAX) {
++			ok = false;
++			break;
++		} else if (!access_ok(VERIFY_WRITE, (void __user *)a,
++				      m->memory_size)) {
++			ok = false;
++			break;
++		}
++	}
++
++	return ok;
++}
++
++long rts_megasas_set_memory(struct rts_megasas_hba *hba,
++			    struct vhost_memory __user *m)
++{
++	struct vhost_memory mem, *newmem, *oldmem;
++	unsigned long size = offsetof(struct vhost_memory, regions);
++
++	if (copy_from_user(&mem, m, size))
++		return -EFAULT;
++	if (mem.padding)
++		return -EOPNOTSUPP;
++	if (mem.nregions > VHOST_MEMORY_MAX_NREGIONS)
++		return -E2BIG;
++	newmem = kmalloc(size + mem.nregions * sizeof *m->regions, GFP_KERNEL);
++	if (!newmem)
++		return -ENOMEM;
++
++	memcpy(newmem, &mem, size);
++	if (copy_from_user(newmem->regions, m->regions,
++			   mem.nregions * sizeof *m->regions)) {
++		kfree(newmem);
++		return -EFAULT;
++	}
++
++	if (!memory_access_ok(hba, newmem)) {
++		kfree(newmem);
++		return -EFAULT;
++	}
++	oldmem = rcu_dereference_protected(hba->memory,
++					   lockdep_is_held(&hba->mutex));
++	rcu_assign_pointer(hba->memory, newmem);
++	synchronize_rcu();
++	kfree(oldmem);
++	return 0;
++}
++
++const struct vhost_memory_region *
++find_region(struct rts_megasas_hba *hba, __u64 addr, __u32 len)
++{
++	struct vhost_memory *mem;
++	struct vhost_memory_region *reg;
++	int i;
++
++	if (!hba->memory)
++		return NULL;
++
++	mem = rcu_dereference(hba->memory);
++	/* linear search is not brilliant, but we really have on the order of 6
++	 * regions in practice */
++	for (i = 0; i < mem->nregions; ++i) {
++		reg = mem->regions + i;
++		if (reg->guest_phys_addr <= addr &&
++		    reg->guest_phys_addr + reg->memory_size - 1 >= addr)
++			return reg;
++	}
++	return NULL;
++}
++
+diff --git a/drivers/target/target_core_sbc.c b/drivers/target/target_core_sbc.c
+index a664c66..3268483 100644
+--- a/drivers/target/target_core_sbc.c
++++ b/drivers/target/target_core_sbc.c
+@@ -464,8 +464,11 @@ sbc_parse_cdb(struct se_cmd *cmd, struct sbc_ops *ops)
+ 		break;
+ 	case SYNCHRONIZE_CACHE:
+ 	case SYNCHRONIZE_CACHE_16:
+-		if (!ops->execute_sync_cache)
+-			return TCM_UNSUPPORTED_SCSI_OPCODE;
++		if (!ops->execute_sync_cache) {
++			size = 0;
++			cmd->execute_cmd = sbc_emulate_noop;
++			break;
++		}
+ 
+ 		/*
+ 		 * Extract LBA and range to be flushed for emulated SYNCHRONIZE_CACHE

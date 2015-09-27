@@ -1,0 +1,1124 @@
+>From d86eeb25148546a409330a431f9adf13d844eabc Mon Sep 17 00:00:00 2001
+From: Hannes Reinecke <hare@suse.de>
+Date: Thu, 7 Feb 2013 20:48:01 +0100
+Subject: [PATCH] rts_megasas: in-kernel megaraid SAS emulation (v6)
+
+Stub functions for in-kernel megaraid SAS emulation, version 6.
+
+Signed-off-by: Hannes Reinecke <hare@suse.de>
+
+diff --git a/hw/Makefile.objs b/hw/Makefile.objs
+index 447e32a..3c9d380 100644
+--- a/hw/Makefile.objs
++++ b/hw/Makefile.objs
+@@ -124,7 +124,7 @@ common-obj-$(CONFIG_OPENCORES_ETH) += opencores_eth.o
+ 
+ # SCSI layer
+ common-obj-$(CONFIG_LSI_SCSI_PCI) += lsi53c895a.o
+-common-obj-$(CONFIG_MEGASAS_SCSI_PCI) += megasas.o
++common-obj-$(CONFIG_MEGASAS_SCSI_PCI) += megasas.o rts_megasas.o
+ common-obj-$(CONFIG_ESP) += esp.o
+ common-obj-$(CONFIG_ESP_PCI) += esp-pci.o
+ 
+diff --git a/hw/megasas.c b/hw/megasas.c
+index eb191f5..5bb5a37 100644
+--- a/hw/megasas.c
++++ b/hw/megasas.c
+@@ -2067,9 +2067,7 @@ static void megasas_scsi_uninit(PCIDevice *d)
+ {
+     MegasasState *s = DO_UPCAST(MegasasState, dev, d);
+ 
+-#ifdef USE_MSIX
+-    msix_uninit(&s->dev, &s->mmio_io);
+-#endif
++    msix_uninit(&s->dev, &s->mmio_io, &s->mmio_io);
+     memory_region_destroy(&s->mmio_io);
+     memory_region_destroy(&s->port_io);
+     memory_region_destroy(&s->queue_io);
+@@ -2106,15 +2104,11 @@ static int megasas_scsi_init(PCIDevice *dev)
+     memory_region_init_io(&s->queue_io, &megasas_queue_ops, s,
+                           "megasas-queue", 0x40000);
+ 
+-#ifdef USE_MSIX
+-    /* MSI-X support is currently broken */
+     if (megasas_use_msix(s) &&
+-        msix_init(&s->dev, 15, &s->mmio_io, 0, 0x2000)) {
++        msix_init(&s->dev, 15, &s->mmio_io, 0, 0x2000,
++                  &s->mmio_io, 0, 0x3800, 0)) {
+         s->flags &= ~MEGASAS_MASK_USE_MSIX;
+     }
+-#else
+-    s->flags &= ~MEGASAS_MASK_USE_MSIX;
+-#endif
+ 
+     bar_type = PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_TYPE_64;
+     pci_register_bar(&s->dev, 0, bar_type, &s->mmio_io);
+@@ -2145,9 +2139,7 @@ static int megasas_scsi_init(PCIDevice *dev)
+     if (s->fw_cmds > MEGASAS_MAX_FRAMES) {
+         s->fw_cmds = MEGASAS_MAX_FRAMES;
+     }
+-    trace_megasas_init(s->fw_sge, s->fw_cmds,
+-                       megasas_use_msix(s) ? "MSI-X" : "INTx",
+-                       megasas_is_jbod(s) ? "jbod" : "raid");
++    trace_megasas_init(s->fw_sge, s->fw_cmds, s->flags);
+     s->fw_luns = (MFI_MAX_LD > MAX_SCSI_DEVS) ?
+         MAX_SCSI_DEVS : MFI_MAX_LD;
+     s->producer_pa = 0;
+@@ -2171,10 +2163,8 @@ static Property megasas_properties[] = {
+                        MEGASAS_DEFAULT_FRAMES),
+     DEFINE_PROP_STRING("hba_serial", MegasasState, hba_serial),
+     DEFINE_PROP_HEX64("sas_address", MegasasState, sas_addr, 0),
+-#ifdef USE_MSIX
+     DEFINE_PROP_BIT("use_msix", MegasasState, flags,
+                     MEGASAS_FLAG_USE_MSIX, false),
+-#endif
+     DEFINE_PROP_BIT("use_jbod", MegasasState, flags,
+                     MEGASAS_FLAG_USE_JBOD, false),
+     DEFINE_PROP_END_OF_LIST(),
+diff --git a/hw/pci/pci_ids.h b/hw/pci/pci_ids.h
+index d8dc2f1..0db3c15 100644
+--- a/hw/pci/pci_ids.h
++++ b/hw/pci/pci_ids.h
+@@ -54,6 +54,7 @@
+ #define PCI_VENDOR_ID_LSI_LOGIC          0x1000
+ #define PCI_DEVICE_ID_LSI_53C895A        0x0012
+ #define PCI_DEVICE_ID_LSI_SAS1078        0x0060
++#define PCI_DEVICE_ID_LSI_SAS0079        0x0079
+ 
+ #define PCI_VENDOR_ID_DEC                0x1011
+ #define PCI_DEVICE_ID_DEC_21154          0x0026
+diff --git a/hw/pci/pci_regs.h b/hw/pci/pci_regs.h
+index 56a404b..5cab48d 100644
+--- a/hw/pci/pci_regs.h
++++ b/hw/pci/pci_regs.h
+@@ -292,7 +292,7 @@
+ #define  PCI_MSI_FLAGS_QSIZE	0x70	/* Message queue size configured */
+ #define  PCI_MSI_FLAGS_QMASK	0x0e	/* Maximum queue size available */
+ #define  PCI_MSI_FLAGS_ENABLE	0x01	/* MSI feature enabled */
+-#define  PCI_MSI_FLAGS_MASKBIT	0x100	/* 64-bit mask bits allowed */
++#define  PCI_MSI_FLAGS_MASKBIT	0x100	/* Per-vector masking allowed */
+ #define PCI_MSI_RFU		3	/* Rest of capability flags */
+ #define PCI_MSI_ADDRESS_LO	4	/* Lower 32 bits */
+ #define PCI_MSI_ADDRESS_HI	8	/* Upper 32 bits (if PCI_MSI_FLAGS_64BIT set) */
+diff --git a/hw/rts_megasas.c b/hw/rts_megasas.c
+new file mode 100644
+index 0000000..9c05019
+--- /dev/null
++++ b/hw/rts_megasas.c
+@@ -0,0 +1,955 @@
++/*
++ * QEMU MegaRAID SAS 9240-4i Host Bus Adapter emulation
++ * Based on the linux driver code at drivers/scsi/megaraid
++ *
++ * Copyright (c) 2012 RisingTide Systems LLC.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <sys/ioctl.h>
++#include <linux/vhost.h>
++#include "hw.h"
++#include "pci/pci.h"
++#include "sysemu/dma.h"
++#include "pci/msi.h"
++#include "pci/msix.h"
++#include "qemu/iov.h"
++#include "scsi.h"
++#include "scsi-defs.h"
++#include "trace.h"
++#include "vhost.h"
++
++#include "mfi.h"
++
++#define MEGASAS_VERSION "2.06"
++#define MEGASAS_MAX_FRAMES 2048         /* Firmware limit at 65535 */
++#define MEGASAS_DEFAULT_FRAMES 1000     /* Windows requires this */
++#define MEGASAS_MAX_SGE 128             /* Firmware limit */
++#define MEGASAS_DEFAULT_SGE 80
++#define MEGASAS_MSIX_ENTRIES 15
++#define MEGASAS_MSI_ENTRIES 4
++
++#define MEGASAS_HBA_SERIAL "RTS-0000"
++#define NAA_LOCALLY_ASSIGNED_ID 0x3ULL
++#define IEEE_COMPANY_LOCALLY_ASSIGNED 0x525400
++#define MEGASAS_IOCTL_NODE "/dev/rts_megasas"
++
++#define MEGASAS_FLAG_USE_JBOD      0
++#define MEGASAS_MASK_USE_JBOD      (1 << MEGASAS_FLAG_USE_JBOD)
++#define MEGASAS_FLAG_USE_MSIX      1
++#define MEGASAS_MASK_USE_MSIX      (1 << MEGASAS_FLAG_USE_MSIX)
++#define MEGASAS_FLAG_USE_MSI       2
++#define MEGASAS_MASK_USE_MSI       (1 << MEGASAS_FLAG_USE_MSI)
++#define MEGASAS_FLAG_USE_VAPIC     3
++#define MEGASAS_MASK_USE_VAPIC     (1 << MEGASAS_FLAG_USE_VAPIC)
++
++typedef struct MegasasIRQFD {
++    MSIMessage msg;
++    int virq;
++    unsigned int users;
++} MegasasIRQFD;
++
++typedef struct MegasasState {
++    PCIDevice dev;
++    MemoryRegion mmio_io;
++    MemoryRegion port_io;
++    MemoryRegion queue_io;
++    MemoryListener memory_listener;
++    struct vhost_memory *mem;
++    int n_mem_sections;
++    MemoryRegionSection *mem_sections;
++    EventNotifier irq_notifier;
++    EventNotifier doorbell_notifier;
++    MegasasIRQFD vector_irqfd[MEGASAS_MSIX_ENTRIES];
++    uint32_t frame_hi;
++
++    int fw_state;
++    uint32_t hba_id;
++    uint32_t fw_sge;
++    uint32_t fw_cmds;
++    uint32_t flags;
++    int fw_luns;
++    int intr_mask;
++    int doorbell;
++
++    uint64_t sas_addr;
++    char *hba_serial;
++
++    int ioctl_fd;
++    char *ioctl_node;
++} MegasasState;
++
++struct rts_megasas_fwstate {
++    int fw_state;
++    int fw_sge;
++    int fw_cmds;
++} QEMU_PACKED;
++
++struct rts_megasas_ioc_queue {
++    int cur_head;
++    int new_head;
++} QEMU_PACKED;
++
++struct rts_megasas_eventfd {
++    int irqfd;
++    int doorbellfd;
++} QEMU_PACKED;
++
++#define MEGASAS_IOC_EVENTFD    _IOWR('M', 4, struct rts_megasas_eventfd)
++#define MEGASAS_IOC_ENDPOINT   _IOWR('M', 5, unsigned long)
++#define MEGASAS_IOC_FRAME      _IOWR('M', 6, unsigned long)
++#define MEGASAS_IOC_FWSTATE    _IOWR('M', 7, struct rts_megasas_fwstate)
++#define MEGASAS_IOC_DOORBELL   _IOWR('M', 8, struct rts_megasas_ioc_queue)
++
++#define MEGASAS_INTR_DISABLED_MASK 0xFFFFFFFF
++
++static void megasas_soft_reset(MegasasState *s);
++
++static bool megasas_intr_enabled(MegasasState *s)
++{
++    if ((s->intr_mask & MEGASAS_INTR_DISABLED_MASK) !=
++        MEGASAS_INTR_DISABLED_MASK) {
++        return true;
++    }
++    return false;
++}
++
++static bool megasas_use_msix(MegasasState *s)
++{
++    return s->flags & MEGASAS_MASK_USE_MSIX;
++}
++
++static bool megasas_use_msi(MegasasState *s)
++{
++    return s->flags & MEGASAS_MASK_USE_MSI;
++}
++
++static bool megasas_use_vAPIC(MegasasState *s)
++{
++    return (s->flags & MEGASAS_MASK_USE_VAPIC) && kvm_msi_via_irqfd_enabled();
++}
++
++static void megasas_frame_set_cmd_status(unsigned long frame, uint8_t v)
++{
++    trace_megasas_ioctl_frame_status(frame, v);
++    stb_phys(frame + offsetof(struct mfi_frame_header, cmd_status), v);
++}
++
++static void megasas_doorbell(MegasasState *s)
++{
++    trace_megasas_doorbell(0, 0, s->doorbell);
++
++    if (megasas_intr_enabled(s)) {
++        /* Notify HBA */
++        s->doorbell++;
++        if (s->doorbell == 1) {
++            if (msix_enabled(&s->dev)) {
++                trace_megasas_msix_raise(0);
++                msix_notify(&s->dev, 0);
++            } else if (msi_enabled(&s->dev)) {
++                trace_megasas_msi_raise(0);
++                msi_notify(&s->dev, 0);
++            } else {
++                trace_megasas_irq_raise();
++                qemu_irq_raise(s->dev.irq[0]);
++            }
++        }
++    }
++}
++
++static int rts_megasas_set_event_notifier(MegasasState *s, bool assign)
++{
++    int ret;
++    struct rts_megasas_eventfd event_fd;
++
++    if (s->ioctl_fd < 0)
++        return -EINVAL;
++
++    if (assign) {
++        event_fd.irqfd = event_notifier_get_fd(&s->irq_notifier);
++        if (event_fd.irqfd < 0) {
++            trace_megasas_event_notifier_failed(errno);
++            return -EAGAIN;
++        }
++        event_fd.doorbellfd = event_notifier_get_fd(&s->doorbell_notifier);
++        if (event_fd.doorbellfd < 0) {
++            trace_megasas_event_notifier_failed(errno);
++            return -EAGAIN;
++        }
++    } else {
++        event_fd.irqfd = -1;
++        event_fd.doorbellfd = -1;
++    }
++
++    ret = ioctl(s->ioctl_fd, MEGASAS_IOC_EVENTFD, &event_fd);
++    if (ret < 0) {
++        trace_megasas_ioctl_eventfd_failed(event_fd.irqfd, errno);
++    }
++    return ret;
++}
++
++static void rts_megasas_guest_notifier_read(EventNotifier *n)
++{
++    MegasasState *s = container_of(n, MegasasState, irq_notifier);
++
++    if (!event_notifier_test_and_clear(n))
++        return;
++
++    megasas_doorbell(s);
++}
++
++static void megasas_enable_notifiers(MegasasState *s, int vector)
++{
++    int ret;
++
++    if (msix_enabled(&s->dev)) {
++        trace_megasas_msix_enabled(vector);
++        msix_vector_use(&s->dev, vector);
++    } else if (msi_enabled(&s->dev)) {
++        trace_megasas_msi_enabled(vector);
++    } else {
++        /* KVM vAPIC works only with MSI/MSI-X */
++        trace_megasas_intr_enabled();
++        s->flags &= ~MEGASAS_MASK_USE_VAPIC;
++    }
++
++    ret = event_notifier_init(&s->irq_notifier, 0);
++    if (ret < 0) {
++        trace_megasas_event_notifier_failed(ret);
++        return;
++    }
++    ret = event_notifier_init(&s->doorbell_notifier, 0);
++    if (ret < 0) {
++        trace_megasas_event_notifier_failed(ret);
++        return;
++    }
++
++    if (megasas_use_vAPIC(s)) {
++        trace_megasas_event_notifier_irqchip();
++        event_notifier_set_handler(&s->irq_notifier, NULL);
++    } else {
++        trace_megasas_event_notifier_use();
++        event_notifier_set_handler(&s->irq_notifier,
++                                   rts_megasas_guest_notifier_read);
++    }
++}
++
++static void megasas_disable_notifiers(MegasasState *s, int vector)
++{
++    trace_megasas_event_notifier_unuse();
++    if (msix_enabled(&s->dev)) {
++        msix_vector_unuse(&s->dev, vector);
++    }
++    event_notifier_set_handler(&s->irq_notifier, NULL);
++    event_notifier_cleanup(&s->irq_notifier);
++}
++
++static int rts_megasas_vector_unmask(PCIDevice *dev, unsigned vector,
++                                     MSIMessage msg)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev, dev);
++
++    if (vector > MEGASAS_MSIX_ENTRIES)
++        return -EINVAL;
++
++    trace_megasas_vector_unmask(vector);
++
++    return rts_megasas_set_event_notifier(s, true);
++}
++
++static void rts_megasas_vector_mask(PCIDevice *dev, unsigned vector)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev, dev);
++
++    if (vector > MEGASAS_MSIX_ENTRIES)
++        return;
++
++    trace_megasas_vector_mask(vector);
++    rts_megasas_set_event_notifier(s, false);
++}
++
++static void rts_megasas_vector_poll(PCIDevice *dev,
++                                    unsigned int vector_start,
++                                    unsigned int vector_end)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev, dev);
++    int vector;
++    MegasasIRQFD *irqfd;
++
++    for (vector = vector_start; vector < vector_end; vector++) {
++        if (vector >= MEGASAS_MSIX_ENTRIES)
++            break;
++        if (!msix_is_masked(dev, vector))
++            continue;
++        irqfd = &s->vector_irqfd[vector];
++        if (irqfd->virq == -1)
++            continue;
++        if (event_notifier_test_and_clear(&s->irq_notifier))
++            msix_set_pending(dev, vector);
++    }
++}
++
++static int rts_megasas_vector_enable(MegasasState *s, int vector)
++{
++    MegasasIRQFD *irqfd;
++
++    if (vector > MEGASAS_MSIX_ENTRIES)
++        return -EINVAL;
++
++    irqfd = &s->vector_irqfd[vector];
++    trace_megasas_vector_enable(vector, irqfd->users);
++
++    if (irqfd->users == 0) {
++        int ret;
++        MSIMessage msg;
++
++        if (msix_enabled(&s->dev)) {
++            msg = msix_get_message(&s->dev, vector);
++        } else if (msi_enabled(&s->dev)) {
++            msg = msi_get_message(&s->dev, vector);
++        } else {
++            return -EINVAL;
++        }
++        ret = kvm_irqchip_add_msi_route(kvm_state, msg);
++        if (ret < 0) {
++            trace_megasas_add_msi_route_failed(ret);
++            return -EAGAIN;
++        }
++        irqfd->virq = ret;
++    }
++    irqfd->users++;
++
++    return 0;
++}
++
++static void rts_megasas_vector_disable(MegasasState *s, int vector)
++{
++    MegasasIRQFD *irqfd;
++
++    if (vector > MEGASAS_MSIX_ENTRIES)
++        return;
++
++    irqfd = &s->vector_irqfd[vector];
++    trace_megasas_vector_disable(vector, irqfd->users);
++
++    if (--irqfd->users) {
++        kvm_irqchip_release_virq(kvm_state, irqfd->virq);
++        irqfd->virq = -1;
++    }
++}
++
++static void megasas_enable_interrupts(MegasasState *s, int vector)
++{
++    MegasasIRQFD *irqfd;
++    int ret;
++
++    if (vector > MEGASAS_MSIX_ENTRIES)
++        return;
++
++    irqfd = &s->vector_irqfd[vector];
++
++    trace_megasas_intr_enabled();
++
++    if (megasas_use_vAPIC(s)) {
++        ret = rts_megasas_vector_enable(s, vector);
++        if (ret < 0)
++            goto out_eventfd;
++
++        ret = kvm_irqchip_add_irqfd_notifier(kvm_state,
++                                             &s->irq_notifier, irqfd->virq);
++        if (ret < 0) {
++            rts_megasas_vector_disable(s, vector);
++            goto out_eventfd;
++        }
++        if (msix_enabled(&s->dev)) {
++            ret = msix_set_vector_notifiers(&s->dev,
++                                            rts_megasas_vector_unmask,
++                                            rts_megasas_vector_mask,
++                                            rts_megasas_vector_poll);
++            if (ret == 0)
++                return;
++
++            trace_megasas_msix_notifier_failed(ret);
++            kvm_irqchip_remove_irqfd_notifier(kvm_state,
++                                              &s->irq_notifier, irqfd->virq);
++            rts_megasas_vector_disable(s, vector);
++        } else if (msi_enabled(&s->dev)) {
++            trace_megasas_msi_enabled(vector);
++        } else {
++            rts_megasas_vector_disable(s, vector);
++        }
++    }
++out_eventfd:
++    rts_megasas_set_event_notifier(s, true);
++}
++
++static void megasas_disable_interrupts(MegasasState *s, int vector)
++{
++    MegasasIRQFD *irqfd = NULL;
++
++    if (vector < MEGASAS_MSIX_ENTRIES)
++        irqfd = &s->vector_irqfd[vector];
++
++    trace_megasas_intr_disabled();
++    rts_megasas_set_event_notifier(s, false);
++    if (irqfd && irqfd->virq > -1) {
++        if (kvm_msi_via_irqfd_enabled()) {
++            if (msix_enabled(&s->dev)) {
++                msix_unset_vector_notifiers(&s->dev);
++            }
++            kvm_irqchip_remove_irqfd_notifier(kvm_state,
++                                              &s->irq_notifier,
++                                              irqfd->virq);
++        }
++        rts_megasas_vector_disable(s, vector);
++    }
++}
++
++static uint64_t megasas_mmio_read(void *opaque, hwaddr addr,
++                                  unsigned size)
++{
++    MegasasState *s = opaque;
++    uint32_t retval = 0;
++    struct rts_megasas_fwstate fw;
++    int ret;
++
++    switch (addr) {
++    case MFI_IDB:
++        retval = 0;
++        break;
++    case MFI_OMSG0:
++    case MFI_OSP0:
++        fw.fw_state = MFI_FWSTATE_UNDEFINED;
++        ret = ioctl(s->ioctl_fd, MEGASAS_IOC_FWSTATE, &fw);
++        if (ret < 0) {
++            trace_megasas_ioctl_fwstate_failed(errno);
++        }
++        if (fw.fw_state != MFI_FWSTATE_UNDEFINED) {
++            s->fw_state = fw.fw_state;
++        }
++        retval = (megasas_use_msix(s) ? MFI_FWSTATE_MSIX_SUPPORTED : 0) |
++            (s->fw_state & MFI_FWSTATE_MASK) |
++            ((s->fw_sge & 0xff) << 16) |
++            (s->fw_cmds & 0xFFFF);
++        break;
++    case MFI_OSTS:
++        s->doorbell += event_notifier_test_and_clear(&s->doorbell_notifier);
++        if (megasas_intr_enabled(s) && s->doorbell) {
++            retval = MFI_GEN2_RM;
++        }
++        break;
++    case MFI_OMSK:
++        retval = s->intr_mask;
++        break;
++    case MFI_ODCR0:
++        retval = s->doorbell;
++        break;
++    default:
++        trace_megasas_mmio_invalid_readl(addr);
++        break;
++    }
++    trace_megasas_mmio_readl(addr, retval);
++    return retval;
++}
++
++static void megasas_mmio_write(void *opaque, hwaddr addr,
++                               uint64_t val, unsigned size)
++{
++    MegasasState *s = opaque;
++    uint64_t frame_addr;
++    int ret;
++
++    trace_megasas_mmio_writel(addr, val);
++    switch (addr) {
++    case MFI_IDB:
++        if (val & MFI_FWINIT_ABORT) {
++            /* Abort all pending cmds */
++        }
++        if (val & MFI_FWINIT_READY) {
++            /* move to FW READY */
++            megasas_soft_reset(s);
++        }
++        if (val & MFI_FWINIT_MFIMODE) {
++            /* discard MFIs */
++        }
++        if (val & MFI_FWINIT_STOP_ADP) {
++            /* Stop processing */
++        }
++        if (val & MFI_FWINIT_ADP_RESET) {
++            /* Reset HBA */
++        }
++        break;
++    case MFI_OMSK:
++        s->intr_mask = val;
++        if (!megasas_intr_enabled(s) &&
++            !msix_enabled(&s->dev) &&
++            !msi_enabled(&s->dev)) {
++            trace_megasas_irq_lower();
++            qemu_irq_lower(s->dev.irq[0]);
++        }
++        if (megasas_intr_enabled(s)) {
++            megasas_enable_notifiers(s, 0);
++            megasas_enable_interrupts(s, 0);
++        } else {
++            megasas_disable_interrupts(s, 0);
++            megasas_disable_notifiers(s, 0);
++        }
++        break;
++    case MFI_ODCR0:
++        s->doorbell = 0;
++        if (megasas_intr_enabled(s)) {
++            if (!msix_enabled(&s->dev) && !msi_enabled(&s->dev)) {
++                trace_megasas_irq_lower();
++                qemu_irq_lower(s->dev.irq[0]);
++            }
++        }
++        break;
++    case MFI_IQPH:
++        /* Received high 32 bits of a 64 bit MFI frame address */
++        s->frame_hi = val;
++        break;
++    case MFI_IQPL:
++        /* Received low 32 bits of a 64 bit MFI frame address */
++    case MFI_IQP:
++        /* Received 32 bit MFI frame address */
++        frame_addr = (val & ~0x1F);
++        /* Add possible 64 bit offset */
++        frame_addr |= ((uint64_t)s->frame_hi << 32);
++        s->frame_hi = 0;
++        ret = ioctl(s->ioctl_fd, MEGASAS_IOC_FRAME, frame_addr);
++        if (ret < 0) {
++            if (errno == EAGAIN) {
++                trace_megasas_ioctl_frame_status(frame_addr,
++                                                 MFI_STAT_INVALID_STATUS);
++                break;
++            }
++            megasas_frame_set_cmd_status(frame_addr, MFI_STAT_MFC_HW_ERROR);
++        }
++        if (!megasas_intr_enabled(s))
++            megasas_doorbell(s);
++        break;
++    default:
++        trace_megasas_mmio_invalid_writel(addr, val);
++        break;
++    }
++}
++
++static const MemoryRegionOps megasas_mmio_ops = {
++    .read = megasas_mmio_read,
++    .write = megasas_mmio_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .impl = {
++        .min_access_size = 8,
++        .max_access_size = 8,
++    }
++};
++
++static uint64_t megasas_port_read(void *opaque, hwaddr addr,
++                                  unsigned size)
++{
++    return megasas_mmio_read(opaque, addr & 0xff, size);
++}
++
++static void megasas_port_write(void *opaque, hwaddr addr,
++                               uint64_t val, unsigned size)
++{
++    megasas_mmio_write(opaque, addr & 0xff, val, size);
++}
++
++static const MemoryRegionOps megasas_port_ops = {
++    .read = megasas_port_read,
++    .write = megasas_port_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .impl = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++    }
++};
++
++static uint64_t megasas_queue_read(void *opaque, hwaddr addr,
++                                   unsigned size)
++{
++    return 0;
++}
++
++static const MemoryRegionOps megasas_queue_ops = {
++    .read = megasas_queue_read,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .impl = {
++        .min_access_size = 8,
++        .max_access_size = 8,
++    }
++};
++
++static void rts_megasas_set_memory(MemoryListener *listener,
++                                   MemoryRegionSection *section,
++                                   bool add)
++{
++    struct MegasasState *dev = container_of(listener, struct MegasasState,
++                                            memory_listener);
++    hwaddr start_addr = section->offset_within_address_space;
++    ram_addr_t size = section->size;
++    int s = offsetof(struct vhost_memory, regions) +
++        (dev->mem->nregions + 1) * sizeof dev->mem->regions[0];
++    int r;
++    void *ram;
++
++    dev->mem = g_realloc(dev->mem, s);
++
++    assert(size);
++
++    /* Optimize no-change case. At least cirrus_vga does this a lot at this time. */
++    ram = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
++    if (add) {
++        if (!vhost_cmp_memory(dev->mem, start_addr, size, (uintptr_t)ram)) {
++            /* Region exists with same address. Nothing to do. */
++            return;
++        }
++    } else {
++        if (!vhost_find_reg(dev->mem, start_addr, size)) {
++            /* Removing region that we don't access. Nothing to do. */
++            return;
++        }
++    }
++
++    vhost_unassign_memory(dev->mem, start_addr, size);
++    if (add) {
++        /* Add given mapping, merging adjacent regions if any */
++        vhost_assign_memory(dev->mem, start_addr, size, (uintptr_t)ram);
++    } else {
++        /* Remove old mapping for this memory, if any. */
++        vhost_unassign_memory(dev->mem, start_addr, size);
++    }
++
++    if (dev->ioctl_fd >= 0) {
++        r = ioctl(dev->ioctl_fd, VHOST_SET_MEM_TABLE, dev->mem);
++        assert(r >= 0);
++    }
++
++    return;
++}
++
++static void rts_megasas_begin(MemoryListener *listener)
++{
++}
++
++static void rts_megasas_commit(MemoryListener *listener)
++{
++}
++
++static void rts_megasas_region_add(MemoryListener *listener,
++                             MemoryRegionSection *section)
++{
++    struct MegasasState *dev = container_of(listener, struct MegasasState,
++                                            memory_listener);
++
++    if (!vhost_section(section)) {
++        return;
++    }
++
++    ++dev->n_mem_sections;
++    dev->mem_sections = g_renew(MemoryRegionSection, dev->mem_sections,
++                                dev->n_mem_sections);
++    dev->mem_sections[dev->n_mem_sections - 1] = *section;
++    rts_megasas_set_memory(listener, section, true);
++}
++
++static void rts_megasas_region_del(MemoryListener *listener,
++                                   MemoryRegionSection *section)
++{
++    struct MegasasState *dev = container_of(listener, struct MegasasState,
++                                            memory_listener);
++    int i;
++
++    if (!vhost_section(section)) {
++        return;
++    }
++
++    rts_megasas_set_memory(listener, section, false);
++    for (i = 0; i < dev->n_mem_sections; ++i) {
++        if (dev->mem_sections[i].offset_within_address_space
++            == section->offset_within_address_space) {
++            --dev->n_mem_sections;
++            memmove(&dev->mem_sections[i], &dev->mem_sections[i+1],
++                    (dev->n_mem_sections - i) * sizeof(*dev->mem_sections));
++            break;
++        }
++    }
++}
++
++static void rts_megasas_region_nop(MemoryListener *listener,
++                             MemoryRegionSection *section)
++{
++}
++
++static void rts_megasas_log_start(MemoryListener *listener,
++                            MemoryRegionSection *section)
++{
++}
++
++static void rts_megasas_log_stop(MemoryListener *listener,
++                           MemoryRegionSection *section)
++{
++}
++
++static void rts_megasas_log_sync(MemoryListener *listener,
++                          MemoryRegionSection *section)
++{
++}
++
++static void rts_megasas_log_global_start(MemoryListener *listener)
++{
++}
++
++static void rts_megasas_log_global_stop(MemoryListener *listener)
++{
++}
++
++static void rts_megasas_eventfd_add(MemoryListener *listener,
++                              MemoryRegionSection *section,
++                              bool match_data, uint64_t data, EventNotifier *e)
++{
++}
++
++static void rts_megasas_eventfd_del(MemoryListener *listener,
++                              MemoryRegionSection *section,
++                              bool match_data, uint64_t data, EventNotifier *e)
++{
++}
++
++static void megasas_soft_reset(MegasasState *s)
++{
++    trace_megasas_reset();
++    s->fw_state = MFI_FWSTATE_READY;
++    s->doorbell = 0;
++    s->intr_mask = MEGASAS_INTR_DISABLED_MASK;
++    s->frame_hi = 0;
++    if (s->ioctl_fd >= 0) {
++        struct rts_megasas_fwstate fw;
++        int ret = 0;
++
++        fw.fw_sge = s->fw_sge;
++        fw.fw_cmds = s->fw_cmds;
++        fw.fw_state = s->fw_state;
++        ret = ioctl(s->ioctl_fd, MEGASAS_IOC_FWSTATE, &fw);
++        if (ret) {
++            trace_megasas_ioctl_fwstate_failed(errno);
++        }
++    }
++}
++
++static void megasas_scsi_reset(DeviceState *dev)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev.qdev, dev);
++
++    megasas_soft_reset(s);
++}
++
++static const VMStateDescription vmstate_megasas = {
++    .name = "megasas",
++    .version_id = 0,
++    .minimum_version_id = 0,
++    .minimum_version_id_old = 0,
++    .fields      = (VMStateField[]) {
++        VMSTATE_PCI_DEVICE(dev, MegasasState),
++
++        VMSTATE_INT32(fw_state, MegasasState),
++        VMSTATE_INT32(intr_mask, MegasasState),
++        VMSTATE_INT32(doorbell, MegasasState),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
++static void megasas_scsi_uninit(PCIDevice *d)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev, d);
++
++    msix_uninit(&s->dev, &s->mmio_io, &s->mmio_io);
++    memory_region_destroy(&s->mmio_io);
++    memory_region_destroy(&s->port_io);
++    memory_region_destroy(&s->queue_io);
++
++    if (s->ioctl_fd >= 0) {
++        ioctl(s->ioctl_fd, MEGASAS_IOC_ENDPOINT, -1);
++        close(s->ioctl_fd);
++    }
++    megasas_disable_interrupts(s, 0);
++    megasas_disable_notifiers(s, 0);
++}
++
++static int megasas_scsi_init(PCIDevice *dev)
++{
++    MegasasState *s = DO_UPCAST(MegasasState, dev, dev);
++    uint8_t *pci_conf;
++    int bar_type, ret, i;
++
++    pci_conf = s->dev.config;
++
++    /* PCI latency timer = 0 */
++    pci_conf[PCI_LATENCY_TIMER] = 0;
++    /* Interrupt pin 1 */
++    pci_conf[PCI_INTERRUPT_PIN] = 0x01;
++
++    memory_region_init_io(&s->mmio_io, &megasas_mmio_ops, s,
++                          "megasas-mmio", 0x4000);
++    memory_region_init_io(&s->port_io, &megasas_port_ops, s,
++                          "megasas-io", 256);
++    memory_region_init_io(&s->queue_io, &megasas_queue_ops, s,
++                          "megasas-queue", 0x40000);
++
++    pcie_cap_init(&s->dev, 0, PCI_EXP_TYPE_ENDPOINT, 0);
++    if (megasas_use_msix(s)) {
++        ret = msix_init(&s->dev, MEGASAS_MSIX_ENTRIES,
++                        &s->mmio_io, 1, 0x2000,
++                        &s->mmio_io, 1, 0x3800, 0);
++        if (ret < 0) {
++            trace_megasas_msix_init_failed(ret);
++            s->flags &= ~MEGASAS_MASK_USE_MSIX;
++        }
++    }
++    if (megasas_use_msi(s)) {
++        ret = msi_init(&s->dev, 0, MEGASAS_MSI_ENTRIES, true, false);
++        if (ret < 0) {
++            trace_megasas_msi_init_failed(ret);
++            s->flags &= ~MEGASAS_MASK_USE_MSI;
++        }
++    }
++
++    bar_type = PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_TYPE_64;
++    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &s->port_io);
++    pci_register_bar(&s->dev, 1, bar_type, &s->mmio_io);
++    pci_register_bar(&s->dev, 3, bar_type, &s->queue_io);
++
++    if (!s->sas_addr) {
++        s->sas_addr = ((NAA_LOCALLY_ASSIGNED_ID << 24) |
++                       IEEE_COMPANY_LOCALLY_ASSIGNED) << 36;
++        s->sas_addr |= (pci_bus_num(dev->bus) << 16);
++        s->sas_addr |= (PCI_SLOT(dev->devfn) << 8);
++        s->sas_addr |= PCI_FUNC(dev->devfn);
++    }
++    if (!s->hba_serial) {
++        s->hba_serial = g_strdup(MEGASAS_HBA_SERIAL);
++    }
++    if (!s->ioctl_node) {
++        s->ioctl_node = g_strdup(MEGASAS_IOCTL_NODE);
++    }
++    if (s->fw_sge >= MEGASAS_MAX_SGE - MFI_PASS_FRAME_SIZE) {
++        s->fw_sge = MEGASAS_MAX_SGE - MFI_PASS_FRAME_SIZE;
++    } else if (s->fw_sge >= 128 - MFI_PASS_FRAME_SIZE) {
++        s->fw_sge = 128 - MFI_PASS_FRAME_SIZE;
++    } else {
++        s->fw_sge = 64 - MFI_PASS_FRAME_SIZE;
++    }
++    if (s->fw_cmds > MEGASAS_MAX_FRAMES) {
++        s->fw_cmds = MEGASAS_MAX_FRAMES;
++    }
++
++    s->ioctl_fd = open(s->ioctl_node, O_RDWR);
++    if (s->ioctl_fd < 0) {
++        trace_megasas_ioctl_open_failed(s->ioctl_node, errno);
++        return errno;
++    }
++    ret = ioctl(s->ioctl_fd, MEGASAS_IOC_ENDPOINT, s->hba_id);
++    if (ret) {
++        trace_megasas_ioctl_endpoint_failed(errno);
++        return errno;
++    }
++    trace_megasas_init(s->fw_sge, s->fw_cmds, s->flags);
++    if (!megasas_use_msix(s) && !megasas_use_msi(s)) {
++        trace_megasas_disable_vapic();
++        s->flags &= ~MEGASAS_MASK_USE_VAPIC;
++    }
++    s->fw_luns = (MFI_MAX_LD > MAX_SCSI_DEVS) ?
++        MAX_SCSI_DEVS : MFI_MAX_LD;
++    s->memory_listener = (MemoryListener) {
++        .begin = rts_megasas_begin,
++        .commit = rts_megasas_commit,
++        .region_add = rts_megasas_region_add,
++        .region_del = rts_megasas_region_del,
++        .region_nop = rts_megasas_region_nop,
++        .log_start = rts_megasas_log_start,
++        .log_stop = rts_megasas_log_stop,
++        .log_sync = rts_megasas_log_sync,
++        .log_global_start = rts_megasas_log_global_start,
++        .log_global_stop = rts_megasas_log_global_stop,
++        .eventfd_add = rts_megasas_eventfd_add,
++        .eventfd_del = rts_megasas_eventfd_del,
++        .priority = 10
++    };
++    s->mem = g_malloc0(offsetof(struct vhost_memory, regions));
++    s->n_mem_sections = 0;
++    s->mem_sections = NULL;
++    memory_listener_register(&s->memory_listener, NULL);
++
++    for (i = 0; i < MEGASAS_MSIX_ENTRIES; i++) {
++        s->vector_irqfd[i].virq = -1;
++        s->vector_irqfd[i].users = 0;
++    }
++
++    return 0;
++}
++
++static Property megasas_properties[] = {
++    DEFINE_PROP_UINT32("max_sge", MegasasState, fw_sge,
++                       MEGASAS_DEFAULT_SGE),
++    DEFINE_PROP_UINT32("max_cmds", MegasasState, fw_cmds,
++                       MEGASAS_DEFAULT_FRAMES),
++    DEFINE_PROP_UINT32("hba_id", MegasasState, hba_id, 0),
++    DEFINE_PROP_STRING("hba_serial", MegasasState, hba_serial),
++    DEFINE_PROP_STRING("ioctl_node", MegasasState, ioctl_node),
++    DEFINE_PROP_HEX64("sas_address", MegasasState, sas_addr, 0),
++    DEFINE_PROP_BIT("use_msix", MegasasState, flags,
++                    MEGASAS_FLAG_USE_MSIX, true),
++    DEFINE_PROP_BIT("use_msi", MegasasState, flags,
++                    MEGASAS_FLAG_USE_MSI, true),
++    DEFINE_PROP_BIT("use_jbod", MegasasState, flags,
++                    MEGASAS_FLAG_USE_JBOD, false),
++    DEFINE_PROP_BIT("use_vapic", MegasasState, flags,
++                    MEGASAS_FLAG_USE_VAPIC, true),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void megasas_class_init(ObjectClass *oc, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(oc);
++    PCIDeviceClass *pc = PCI_DEVICE_CLASS(oc);
++
++    pc->init = megasas_scsi_init;
++    pc->exit = megasas_scsi_uninit;
++    pc->vendor_id = PCI_VENDOR_ID_LSI_LOGIC;
++    pc->device_id = PCI_DEVICE_ID_LSI_SAS0079;
++    pc->subsystem_vendor_id = PCI_VENDOR_ID_LSI_LOGIC;
++    pc->subsystem_id = 0x9260;
++    pc->class_id = PCI_CLASS_STORAGE_RAID;
++    pc->is_express = 1;
++    dc->props = megasas_properties;
++    dc->reset = megasas_scsi_reset;
++    dc->vmsd = &vmstate_megasas;
++    dc->desc = "LSI MegaRAID SAS 9260-4i";
++}
++
++static const TypeInfo megasas_info = {
++    .name  = "rts_megasas",
++    .parent = TYPE_PCI_DEVICE,
++    .instance_size = sizeof(MegasasState),
++    .class_init = megasas_class_init,
++};
++
++static void megasas_register_types(void)
++{
++    type_register_static(&megasas_info);
++}
++
++type_init(megasas_register_types)
+diff --git a/trace-events b/trace-events
+index 1011f27..4315761 100644
+--- a/trace-events
++++ b/trace-events
+@@ -601,6 +601,7 @@ megasas_qf_dequeue(unsigned int index) "dequeue frame %x"
+ megasas_qf_map_failed(int cmd, unsigned long frame) "scmd %d: frame %lu"
+ megasas_qf_complete_noirq(uint64_t context) "context %" PRIx64 " "
+ megasas_qf_complete(uint64_t context, unsigned int tail, unsigned int offset, int busy, unsigned int doorbell) "context %" PRIx64 " tail %x offset %d busy %d doorbell %x"
++megasas_doorbell(unsigned int tail, unsigned int offset, int doorbell) "tail %x offset %d doorbell %x"
+ megasas_handle_frame(const char *cmd, uint64_t addr, uint64_t context, uint32_t count) "MFI cmd %s addr %" PRIx64 " context %" PRIx64 " count %d"
+ megasas_frame_busy(uint64_t addr) "frame %" PRIx64 " busy"
+ megasas_unhandled_frame_cmd(int cmd, uint8_t frame_cmd) "scmd %d: Unhandled MFI cmd %x"
+@@ -631,6 +632,8 @@ megasas_iovec_sgl_underflow(int cmd, int index) "scmd %d: iovec count %d"
+ megasas_iovec_sgl_invalid(int cmd, int index, uint64_t pa, uint32_t len) "scmd %d: element %d pa %" PRIx64 " len %u"
+ megasas_iovec_overflow(int cmd, int len, int limit) "scmd %d: len %d limit %d"
+ megasas_iovec_underflow(int cmd, int len, int limit) "scmd %d: len %d limit %d"
++megasas_ioctl_open_failed(const char *node, int err) "node %s error %d"
++megasas_ioctl_error(int cmd, int err) "scmd %d: ioctl error %d"
+ megasas_handle_dcmd(int cmd, int opcode) "scmd %d: MFI DCMD opcode %x"
+ megasas_finish_dcmd(int cmd, int size) "scmd %d: MFI DCMD wrote %d bytes"
+ megasas_dcmd_req_alloc_failed(int cmd, const char *desc) "scmd %d: %s alloc failed"
+@@ -655,16 +658,38 @@ megasas_abort_frame(int cmd, int abort_cmd) "scmd %d: aborting frame %x"
+ megasas_abort_no_cmd(int cmd, uint64_t context) "scmd %d: no active command for frame context %" PRIx64 ""
+ megasas_abort_invalid_context(int cmd, uint64_t context, int abort_cmd) "scmd %d: invalid frame context %" PRIx64 " for abort frame %x"
+ megasas_reset(void) "Reset"
+-megasas_init(int sges, int cmds, const char *intr, const char *mode) "Using %d sges, %d cmds, %s, %s mode"
++megasas_init(int sges, int cmds, int flags) "Using %d sges, %d cmds, flags %x"
+ megasas_msix_raise(int vector) "vector %d"
++megasas_msix_init_failed(int ret) "error %d"
++megasas_msix_enabled(int vector) "vector %d"
++megasas_msi_raise(int vector) "vector %d"
++megasas_msi_enabled(int vector) "vector %d"
++megasas_msi_init_failed(int ret) "error %d"
+ megasas_irq_lower(void) "INTx"
+ megasas_irq_raise(void) "INTx"
+ megasas_intr_enabled(void) "Interrupts enabled"
+ megasas_intr_disabled(void) "Interrupts disabled"
++megasas_disable_vapic(void) "Disable vAPIC"
+ megasas_mmio_readl(unsigned long addr, uint32_t val) "addr 0x%lx: 0x%x"
+ megasas_mmio_invalid_readl(unsigned long addr) "addr 0x%lx"
+ megasas_mmio_writel(uint32_t addr, uint32_t val) "addr 0x%x: 0x%x"
+ megasas_mmio_invalid_writel(uint32_t addr, uint32_t val) "addr 0x%x: 0x%x"
++megasas_event_notifier_failed(int err) "error %d"
++megasas_add_msi_route_failed(int err) "error %d"
++megasas_irqfd_notifier_failed(int err) "error %d"
++megasas_msix_notifier_failed(int err) "error %d"
++megasas_event_notifier_unuse(void) "Disable event notifier"
++megasas_event_notifier_irqchip(void) "Use KVM irqchip"
++megasas_event_notifier_use(void) "Use event notifier"
++megasas_vector_enable(int vector, int users) "vector %d usage %d"
++megasas_vector_disable(int vector, int users) "vector %d usage %d"
++megasas_vector_mask(int vector) "vector %d"
++megasas_vector_unmask(int vector) "vector %d"
++megasas_ioctl_frame_status(uint64_t frame, uint8_t status) "frame 0x%" PRIx64 " status 0x%x"
++megasas_ioctl_fwstate_failed(int err) "error %d"
++megasas_ioctl_endpoint_failed(int err) "error %d"
++megasas_ioctl_doorbell_failed(int err) "error %d"
++megasas_ioctl_eventfd_failed(int fd, int err) "fd %d error %d"
+ 
+ # hw/milkymist-ac97.c
+ milkymist_ac97_memory_read(uint32_t addr, uint32_t value) "addr %08x value %08x"
