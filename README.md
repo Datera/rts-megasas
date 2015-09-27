@@ -1,4 +1,11 @@
-attached is the latest version (v6) of the rts_megasas combo.
+vhost style megasas LIO driver and QEMU eventfd patches
+
+This code was originally developed against LIO + QEMU code
+from the Feb 2013.
+
+As per Dr. Hannes:
+
+"Attached is the latest version (v6) of the rts_megasas combo.
 As threatened I've updated the emulation to a later silicon 
 (9260-4i), so that Windows _might_ be compelled to use MSI/MSI-X.
 
@@ -28,8 +35,4 @@ to get the 'megacli' command running under windows. Which displayed
 the disks and everything.
 The 'MSM' (ie the UI version) worked, too, but failed to display any 
 disks. Probably all the better as you couldn't modify the RAID 
-settings anyway :-)
-
-Cheers,
-
-Hannes
+settings anyway :-)"
